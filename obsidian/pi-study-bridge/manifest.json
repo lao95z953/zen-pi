@@ -1,0 +1,9 @@
+{
+  "id": "pi-study-bridge",
+  "name": "Zen Pi Study Bridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "把目前筆記與編輯器內容傳給同一台電腦的 Pi 學習 Agent。",
+  "author": "LAO_Z_3",
+  "isDesktopOnly": true
+}

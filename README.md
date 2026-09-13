@@ -1,0 +1,52 @@
+# Zen Pi
+
+Zen Pi 是 [Pi](https://github.com/earendil-works/pi) 的 Agent extension 與本機 Web UI。它把一般對話、Obsidian 筆記學習和來源查證研究分成明確的模式，並依 Workspace 管理 Pi Session。Web UI 提供 Side Chat、Fork、Sub Agent、Transcript 和 Token 用量；可在電腦使用，也可透過 Tailscale Serve 從手機連線。
+
+## 開始使用
+
+需要 Node.js 22、npm、[Pi](https://github.com/earendil-works/pi) 0.85.1，以及你自己的模型登入。Study 模式另需 Obsidian vault；PDF 來源讀取需要 Poppler 的 `pdftotext`。Zen Pi 不包含模型帳號或筆記內容。
+
+```bash
+git clone https://github.com/lao95z953/zen-pi.git
+cd zen-pi
+npm ci --ignore-scripts --legacy-peer-deps
+pi install .
+```
+
+使用 Study 時，先設定 `PI_STUDY_VAULT` 為 vault 的絕對路徑，再安裝並啟用 Obsidian 外掛：
+
+```bash
+export PI_STUDY_VAULT=/path/to/your/vault
+node scripts/install-study-bridge.mjs "$PI_STUDY_VAULT"
+pi
+```
+
+在 Pi 執行 `/study` 進入學習模式，`/research <問題>` 開始研究；`/mode general` 回一般模式。切換規則見 [模式](docs/modes.md)，學習來源與保存規則見 [Study](docs/study.md)、[Research](docs/research.md)。
+
+啟動本機 Web UI：
+
+```bash
+npm run web
+```
+
+開啟 <http://127.0.0.1:4318>。Web server 只監聽 loopback；手機存取可依 [Web UI 文件](docs/web.md)設定 Tailscale Serve。Web UI 可以讀取本機 Pi Session，並能以 Pi 的權限操作 Workspace；不要將此服務直接暴露到公網。
+
+## 功能與限制
+
+- Workspace 依對話工作目錄分組，列出 Web 與本機 Pi Session。Side Chat 和 Fork 顯示在父 Session 底下，可重新命名、移到回收清單與還原。
+- Study 根據目前筆記與已展示的來源整理 Wiki 和理解紀錄；Research 保存查證進度。來源引用記錄版本與片段，模型的推論仍需檢查。
+- Transcript 在主視窗顯示訊息、工具輸入輸出與錯誤。Token 數字以 Pi／模型回報為準；分支歷史累計包含重複讀取的快取，不等於上下文占用或帳單。
+- Sub Agent 在獨立 Pi Session 執行；程式任務使用 Git worktree。`read` 工具限制不是作業系統沙箱，結果需由主 Agent 或使用者檢查。詳見 [Sub Agent](docs/subagents.md)。
+- 可選用 [NVIDIA SoL-Pi](https://github.com/NVlabs/SoL-Pi) 的 Action Fusion 與 ObservationPack；Zen Pi 不內含 SoL-Pi。整合方式見 [SoL-Pi](docs/sol-pi.md)。
+
+## 開發
+
+```bash
+npm run check
+npm test
+python3 eval/run.py --validate
+```
+
+測試使用臨時 vault 與本機假 provider，不需要付費模型。實際模型品質需另外評估，fixture 通過不代表研究或教學答案正確。開發流程見 [development.md](docs/development.md)。
+
+本專案採用 [MIT License](LICENSE)。

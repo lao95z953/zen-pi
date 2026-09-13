@@ -1,0 +1,37 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1
+          cache: npm
+      - name: Install Pi runtime and project dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes poppler-utils
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
+          npm ci --ignore-scripts --legacy-peer-deps
+      - name: Prepare pinned SoL-Pi integration source
+        run: |
+          git clone https://github.com/NVlabs/SoL-Pi.git "$RUNNER_TEMP/sol-pi"
+          git -C "$RUNNER_TEMP/sol-pi" checkout d7ecfc089944f0d04b80122a0a9a6ca0d786f3d0
+          echo "PI_SOL_PI_ROOT=$RUNNER_TEMP/sol-pi" >> "$GITHUB_ENV"
+      - name: Check source and behavior
+        run: |
+          npm run check
+          npm test
+          python3 eval/run.py --validate
+          git diff --check
