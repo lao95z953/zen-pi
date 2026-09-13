@@ -40,11 +40,11 @@ async function gate(name) { while(!existsSync(join(root,name))) await new Promis
 async function handle(request) {
   appendFileSync(join(root,'audit.jsonl'),JSON.stringify({nativeId,sessionFile,type:request.type,payload:request})+'\\n');
   if(request.type==='get_state') {
+    if(args.includes('--fork') && existsSync(join(root,'delay-side'))) { writeFileSync(join(root,'side-waiting'),'yes'); await gate('release-side'); }
     const before=state();
     if(delayState) { delayState=false; writeFileSync(join(root,'save-waiting'),'yes'); await gate('release-save'); reply(request,before); writeFileSync(join(root,'save-released'),'yes'); }
     else reply(request,before);
   } else if(request.type==='get_messages') {
-    if(args.includes('--fork') && existsSync(join(root,'delay-side'))) { writeFileSync(join(root,'side-waiting'),'yes'); await gate('release-side'); }
     reply(request,{messages:[{role:'user',content:'Synthetic history',timestamp:1}]});
   } else if(request.type==='get_commands') reply(request,{commands:['mode','study','study-status','study-notes','race-autosave'].map(name=>({name,source:'extension'}))});
   else if(request.type==='get_available_models') reply(request,{models});

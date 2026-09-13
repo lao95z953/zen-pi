@@ -13,6 +13,7 @@ let state = { messages: [], sources: [], sessions: [], workspaces: [], workspace
 let connected = false, working = false, stopPending = false, shownDialog = null, draftKey = '', renderQueued = false, noteSearchRevision = 0;
 let commandOptions = [], commandIndex = 0, commandDismissed = false, modelRequest = null;
 let queuePending = false, agentPending = false, controlRequest = null, agentRequest = null, panelView = 'sources', exportURL = null;
+const imageDrafts = new Map(), imageUploads = new Map(), imageAliases = new Map();
 const promptPending = new Set(), compactPending = new Set(), compactResults = new Map(), jobNodes = new Map();
 const thinkingLabels = { off: '關閉', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '最高' };
 const messageNodes = new Map();
@@ -45,7 +46,7 @@ function controls() {
   document.querySelectorAll('.session-item').forEach(button => { button.disabled = !can.browse; });
   document.querySelectorAll('.session-more').forEach(button => { button.disabled = !connected || sessionManagementPending; });
   const tooLong = $('prompt').value.length > 32000;
-  $('send').disabled = !can.send || promptPending.has(draftScope(state)) || !$('prompt').value.trim() || tooLong;
+  $('send').disabled = !can.send || promptPending.has(draftScope(state)) || (!$('prompt').value.trim() && !draftImages().length) || uploadingImages() || imageLimitExceeded() || tooLong;
   $('draft-limit').hidden = !tooLong;
   $('send').hidden = state.busy || !!current.operation; $('stop').hidden = !state.busy && !current.operation; $('stop').disabled = !connected || stopPending;
   $('new-session').disabled = !can.start;
@@ -54,7 +55,7 @@ function controls() {
   $('choose-model').disabled = !!modelReason; $('choose-model').title = modelReason || '選擇模型（/model）';
   for (const id of ['model-action-hint', 'model-dialog-hint']) { $(id).textContent = modelReason; $(id).hidden = !modelReason; }
   document.querySelectorAll('#model-results button').forEach(button => { button.disabled = !!modelReason; });
-  $('prompt').disabled = !can.input;
+  $('prompt').disabled = !can.input; $('add-image').disabled = !can.input;
   $('workspace-select').disabled = !can.browse || !(state.workspaces || []).length;
   $('add-workspace').disabled = !can.browse; $('save-workspace').disabled = !can.browse;
   $('refresh-sessions').disabled = !can.browse;
@@ -72,7 +73,7 @@ function controls() {
   $('compact-focus').disabled = !!current.operation;
   $('queue-actions').hidden = !state.busy || !!current.operation || state.readOnly;
   if ($('queue-actions').hidden) $('queue-actions').open = false;
-  const queueMessage = $('prompt').value.trim(), canQueue = agents.queue && !!queueMessage && !queueMessage.startsWith('/') && !tooLong;
+  const queueMessage = $('prompt').value.trim(), canQueue = agents.queue && (!!queueMessage || !!draftImages().length) && !uploadingImages() && !imageLimitExceeded() && !queueMessage.startsWith('/') && !tooLong;
   $('queue-steer').disabled = !canQueue; $('queue-follow').disabled = !canQueue;
   $('clear-queue').disabled = !agents.clearQueue;
   $('new-agent').disabled = !agents.createAgent; $('start-agent').disabled = !agents.createAgent;
@@ -84,6 +85,77 @@ function controls() {
   $('connection-dot').classList.toggle('online', connected && (state.online || !state.sessionId || state.readOnly));
   sessionManagementControls();
 }
+function imageScope(scope = draftKey) { const seen = new Set(); while (imageAliases.has(scope) && !seen.has(scope)) { seen.add(scope); scope = imageAliases.get(scope); } return scope; }
+function draftImages(scope = draftKey) {
+  scope = imageScope(scope);
+  if (!imageDrafts.has(scope)) {
+    let images = []; try { images = JSON.parse(sessionStorage.getItem(`${scope}:images`) || '[]'); } catch {}
+    imageDrafts.set(scope, Array.isArray(images) ? images.filter(image => /^[a-f0-9]{64}$/.test(image?.id || '') && Number.isFinite(image.size)).slice(0, 100) : []);
+  }
+  return imageDrafts.get(scope);
+}
+function imageLimitExceeded() { return draftImages().length > 4 || draftImages().reduce((n, image) => n + image.size, 0) > 8 * 1024 * 1024; }
+function uploadingImages(scope = draftKey) { return imageUploads.get(imageScope(scope))?.count || 0; }
+function writeImages(scope, images) {
+  scope = imageScope(scope); const unique = [...new Map(images.map(image => [image.id, image])).values()];
+  imageDrafts.set(scope, unique);
+  try { sessionStorage.setItem(`${scope}:images`, JSON.stringify(unique)); } catch { setError('瀏覽器無法保存圖片草稿，重新整理前請先送出。'); }
+  if (scope === imageScope(draftKey)) { renderAttachments(); controls(); }
+}
+function imageButton(image, index) {
+  const button = el('button', 'image-preview'); button.type = 'button'; button.setAttribute('aria-label', `放大圖片 ${index + 1}`);
+  const img = el('img'); img.src = `/api/images/${image.id}`; img.alt = `圖片 ${index + 1}`; img.loading = 'lazy';
+  button.append(img); button.onclick = () => { $('image-full').src = img.src; $('image-dialog').showModal(); };
+  return button;
+}
+function renderAttachments() {
+  const list = $('image-attachments'), images = draftImages(); list.replaceChildren(); list.hidden = !images.length;
+  images.forEach((image, index) => {
+    const item = el('div', 'image-attachment'), remove = el('button', 'remove-image', '×'); remove.type = 'button'; remove.setAttribute('aria-label', `移除圖片 ${index + 1}`);
+    remove.onclick = () => writeImages(draftKey, draftImages().filter(row => row.id !== image.id));
+    item.append(imageButton(image, index), remove); list.append(item);
+  });
+  const pending = uploadingImages();
+  $('image-status').hidden = !pending && !imageLimitExceeded();
+  $('image-status').textContent = pending ? `正在加入 ${pending} 張圖片…` : imageLimitExceeded() ? '已恢復所有圖片；每次最多 4 張、合計 8 MiB，請先整理附件。' : '';
+}
+async function addImageFiles(files) {
+  if ($('prompt').disabled || !files.length) return;
+  const scope = imageScope(), workspaceId = state.workspaceId;
+  try {
+    const pending = imageUploads.get(scope) || { count: 0, bytes: 0 };
+    if (draftImages(scope).length + pending.count + files.length > 4) throw Error('每則訊息最多加入 4 張圖片。');
+    if (files.some(file => !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type))) throw Error('請使用 PNG、JPEG、WebP 或 GIF 圖片。');
+    if (files.some(file => file.size > 5 * 1024 * 1024)) throw Error('每張圖片最多 5 MiB。');
+    const bytes = files.reduce((n, file) => n + file.size, 0);
+    if (draftImages(scope).reduce((n, image) => n + image.size, 0) + pending.bytes + bytes > 8 * 1024 * 1024) throw Error('圖片合計最多 8 MiB。');
+    imageUploads.set(scope, { count: pending.count + files.length, bytes: pending.bytes + bytes }); renderAttachments(); controls();
+    try {
+      const images = await Promise.all(files.map(file => new Promise((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve({ mimeType: file.type, data: String(reader.result).split(',')[1] }); reader.onerror = () => reject(Error('圖片讀取失敗，請重新貼上。')); reader.readAsDataURL(file);
+      })));
+      const response = await api('images', { workspaceId, images });
+      writeImages(scope, [...draftImages(scope), ...response.images]);
+    } finally {
+      const target = imageScope(scope), current = imageUploads.get(target) || { count: files.length, bytes };
+      imageUploads.set(target, { count: current.count - files.length, bytes: current.bytes - bytes });
+      if (!uploadingImages(target)) for (const alias of imageAliases.keys()) if (imageScope(alias) === target) imageAliases.delete(alias);
+      renderAttachments(); controls();
+    }
+  } catch (error) { setError(imageScope(scope) === imageScope() ? error.message : `先前對話的圖片未加入：${error.message}`); }
+}
+$('add-image').onclick = () => $('image-input').click();
+$('image-input').onchange = event => { const files = [...event.target.files]; event.target.value = ''; void addImageFiles(files); };
+$('prompt').addEventListener('paste', event => {
+  const files = [...event.clipboardData?.items || []].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  const text = event.clipboardData.getData('text/plain');
+  if (text) { const input = $('prompt'); input.setRangeText(text, input.selectionStart, input.selectionEnd, 'end'); resizeInput(); saveDraft(); }
+  void addImageFiles(files);
+});
+$('close-image').onclick = () => $('image-dialog').close();
+
 function readLayoutPreferences() {
   const defaults = { desktop: { left: true, right: false, header: false, focused: false, restore: null }, mobile: { header: true, focused: false, restore: null } };
   try {
@@ -232,6 +304,10 @@ function restoreToScope(scope, text, append = false) {
 }
 function transferDraft(from, to) {
   if (from === to) return;
+  const images = draftImages(from), pending = imageUploads.get(imageScope(from));
+  writeImages(to, [...draftImages(to), ...images]); writeImages(from, []);
+  if (pending) { imageUploads.set(imageScope(to), pending); imageUploads.delete(imageScope(from)); }
+  if (pending?.count) imageAliases.set(from, to); renderAttachments();
   try {
     const text = sessionStorage.getItem(from) || '';
     if (text) { restoreToScope(to, text); sessionStorage.removeItem(from); }
@@ -241,7 +317,7 @@ function restoreDraft(snapshot) {
   const key = draftScope(snapshot); if (draftKey === key) return;
   if (draftKey) saveDraft(); draftKey = key;
   try { $('prompt').value = sessionStorage.getItem(key) || ''; } catch { $('prompt').value = ''; }
-  resizeInput();
+  renderAttachments(); resizeInput();
 }
 function apply(next) {
   if (!isCurrent(state, next)) return false;
@@ -374,8 +450,13 @@ function renderMessages() {
       const label = el('div', 'message-label');
       if (message.role === 'assistant') label.append(el('span', 'mini-pi', 'π'));
       label.append(document.createTextNode(message.role === 'user' ? '你' : 'Pi'));
-      node.append(label, el('div', 'message-content'), el('div', 'message-error'));
+      node.append(label, el('div', 'message-content'), el('div', 'message-images'), el('div', 'message-error'));
       messageNodes.set(message.id, node); container.append(node);
+    }
+    const imageKey = JSON.stringify(message.images || []);
+    if (node._images !== imageKey) {
+      node._images = imageKey; const media = node.querySelector('.message-images'); media.replaceChildren();
+      for (const [index, image] of (message.images || []).entries()) media.append(image.unavailable ? el('span', 'small muted', '這張圖片無法預覽') : imageButton(image, index));
     }
     node.hidden = message.role === 'assistant' && !message.text && !message.error && !message.streaming;
     if (node._text !== message.text || node._streaming !== message.streaming) {
@@ -658,9 +739,10 @@ $('prompt').onkeydown = event => {
 };
 $('composer').onsubmit = async event => {
   event.preventDefault(); if (!workspaceControls(state, { connected, working }).send || promptPending.has(draftScope(state))) return;
-  const message = $('prompt').value.trim(); if (!message || message.length > 32000) return;
+  const message = $('prompt').value.trim(), images = [...draftImages()]; if ((!message && !images.length) || message.length > 32000 || uploadingImages() || imageLimitExceeded()) return;
+  if (images.length && message.startsWith('/')) { setError('圖片請搭配一般訊息送出；Slash 指令不會接收圖片。'); return; }
   const workspaceId = state.workspaceId; let sessionId = state.sessionId, restoreScope = draftScope(state);
-  const initialScope = restoreScope; promptPending.add(initialScope);
+  const initialScope = restoreScope; promptPending.add(initialScope); writeImages(initialScope, []);
   $('prompt').value = ''; closeCommands(); resizeInput(); saveDraft();
   setError('');
   try {
@@ -670,9 +752,9 @@ $('composer').onsubmit = async event => {
         apply(created); transferDraft(restoreScope, draftScope(created)); sessionId = created.sessionId; restoreScope = draftScope(created); promptPending.add(restoreScope);
       }
       const requested = { workspaceId, sessionId, startedAt: state.startedAt, model: state.model };
-      showCommandResponse(await api('prompt', { sessionId, workspaceId, message }), requested);
+      showCommandResponse(await api('prompt', { sessionId, workspaceId, message, ...(images.length ? { imageIds: images.map(image => image.id) } : {}) }), requested);
   } catch (e) {
-      restoreToScope(restoreScope, message);
+      restoreToScope(restoreScope, message); writeImages(restoreScope, [...images, ...draftImages(restoreScope)]);
       setError(restoreScope !== draftScope(state) ? `先前對話未送出訊息，草稿已保留在原 Workspace。${e.message}` : e.message);
   } finally { promptPending.delete(initialScope); promptPending.delete(restoreScope); controls(); }
 };
@@ -681,7 +763,7 @@ $('stop').onclick = async () => {
   const sessionId = state.sessionId, scope = draftScope(state);
   stopPending = true;
   $('stop').disabled = true;
-  try { const data = await api('stop', { sessionId }); if (data.restored) restoreToScope(scope, data.restored, true); }
+  try { const data = await api('stop', { sessionId }); if (data.restored) restoreToScope(scope, data.restored, true); if (data.restoredImages?.length) writeImages(scope, [...draftImages(scope), ...data.restoredImages]); }
   catch (e) { setError(scope === draftScope(state) ? e.message : `先前對話停止失敗：${e.message}`); } finally { stopPending = false; controls(); }
 };
 function capture() { return { sessionId: state.sessionId, workspaceId: state.workspaceId, startedAt: state.startedAt, model: state.model }; }
@@ -793,9 +875,11 @@ function renderQueue() {
   $('queue-panel').hidden = !count && $('queue-status').hidden;
   if ($('queue-panel').hidden) $('queue-panel').open = false; $('queue-count').textContent = String(count);
   const list = $('queue-list'); list.replaceChildren();
-  for (const [label, items] of [['立即補充', steering], ['下一輪', following]]) {
-    for (const item of items) {
+  for (const [label, items, key] of [['立即補充', steering, 'steering'], ['下一輪', following, 'followUp']]) {
+    for (const [index, item] of items.entries()) {
       const row = el('div', 'queue-item'); row.append(el('strong', '', label), el('p', '', typeof item === 'string' ? item : item.text || item.message || ''));
+      const images = state.queuedImages?.[key]?.[index] || [];
+      if (images.length) row.append(el('span', 'small muted', `${images.length} 張圖片`));
       list.append(row);
     }
   }
@@ -803,12 +887,12 @@ function renderQueue() {
 }
 async function enqueue(kind) {
   $('queue-actions').open = false;
-  const requested = capture(), scope = draftScope(requested), message = $('prompt').value.trim();
-  if (!agentControls(state, { connected, working, queuePending }).queue || !message || message.length > 32000) return;
+  const requested = capture(), scope = draftScope(requested), message = $('prompt').value.trim(), images = [...draftImages()];
+  if (!agentControls(state, { connected, working, queuePending }).queue || (!message && !images.length) || message.length > 32000 || uploadingImages() || imageLimitExceeded()) return;
   if (message.startsWith('/')) { setError('指令請等目前回覆完成後送出；佇列只接受補充訊息。'); return; }
-  queuePending = true; $('prompt').value = ''; closeCommands(); resizeInput(); saveDraft(); controls();
-  try { showCommandResponse(await api('queue', scopedBody(requested, { action: kind, message })), requested); }
-  catch (e) { restoreToScope(scope, message); setError(isRequested(requested) ? e.message : `先前對話的補充未送出，草稿已保留。${e.message}`); }
+  queuePending = true; writeImages(scope, []); $('prompt').value = ''; closeCommands(); resizeInput(); saveDraft(); controls();
+  try { showCommandResponse(await api('queue', scopedBody(requested, { action: kind, message, ...(images.length ? { imageIds: images.map(image => image.id) } : {}) })), requested); }
+  catch (e) { restoreToScope(scope, message); writeImages(scope, [...images, ...draftImages(scope)]); setError(isRequested(requested) ? e.message : `先前對話的補充未送出，草稿已保留。${e.message}`); }
   finally { queuePending = false; controls(); }
 }
 async function clearQueue() {
@@ -820,6 +904,7 @@ async function clearQueue() {
     showCommandResponse(response, requested);
     const restored = [response.restored?.steering || [], response.restored?.followUp || []].flat().map(item => typeof item === 'string' ? item : item.text || item.message || '').filter(Boolean).join('\n\n');
     if (restored) restoreToScope(draftScope(requested), restored, true);
+    if (response.restoredImages?.length) writeImages(draftScope(requested), [...draftImages(draftScope(requested)), ...response.restoredImages]);
     if (isRequested(requested)) { $('queue-status').textContent = restored ? '佇列已清空，待送內容已放回草稿。' : '待送內容已清空。'; $('queue-status').hidden = false; $('queue-panel').hidden = false; $('queue-panel').open = true; }
   } catch (e) { setError(isRequested(requested) ? e.message : `先前對話的佇列未清空：${e.message}`); }
   finally { queuePending = false; controls(); }

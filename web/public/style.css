@@ -1998,3 +1998,27 @@ p:last-child {
     #sources-panel:not([hidden]) { transform:translateX(100%); clip-path:inset(0); }
   }
 }
+
+/* Attachments stay compact until a picture is added. */
+.attach-button { flex:0 0 36px; width:36px; height:36px; padding:8px; border-radius:8px; color:var(--muted); }
+.attach-button:hover { background:#ffffff08; color:var(--accent); }
+.attach-button svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.5; }
+.image-attachments { display:flex; flex-wrap:wrap; gap:9px; max-height:176px; overflow:auto; padding:5px 3px 8px; }
+.image-attachment { position:relative; flex:0 0 72px; }
+.image-preview { display:block; padding:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#0003; }
+.image-attachment .image-preview { width:72px; height:72px; }
+.image-preview img { display:block; width:100%; height:100%; object-fit:contain; }
+.remove-image { position:absolute; top:0; right:0; width:26px; height:26px; line-height:1; padding:0; border-radius:0 7px; background:#141611e8; color:var(--text); }
+.message-images { display:flex; flex-wrap:wrap; gap:12px; }
+.message-images:empty { display:none; }
+.message-images .image-preview { width:200px; max-width:100%; height:160px; margin-top:10px; }
+.image-dialog { width:auto; max-width:94vw; padding:16px; }
+.image-dialog #close-image { display:block; margin:0 0 10px auto; }
+#image-full { display:block; max-width:85vw; max-height:78dvh; object-fit:contain; }
+@media(max-width:767px) {
+  .attach-button { width:44px; height:44px; flex-basis:44px; padding:12px; }
+  .image-attachment { flex-basis:88px; }
+  .image-attachment .image-preview { width:88px; height:88px; }
+  .remove-image { width:44px; height:44px; }
+  .composer-bottom .model-button { min-width:0; }
+}

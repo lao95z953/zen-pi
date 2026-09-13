@@ -21,12 +21,12 @@ let firstRead = true, heldState = false;
 async function handle(request) {
   audit({ type: request.type });
   if (request.type === 'get_messages') {
+    reply(request, { messages: [] });
+  } else if (request.type === 'get_state') {
     if (firstRead) {
       firstRead = false; audit({ type: 'open-held' });
       while (!existsSync(process.env.RACE_RELEASE)) await new Promise(resolve => setTimeout(resolve, 5));
     }
-    reply(request, { messages: [] });
-  } else if (request.type === 'get_state') {
     const state = { sessionId: id, sessionFile: file,
       model: { provider: 'fixture', id: 'race', name: 'Race fixture' }, thinkingLevel: 'off', isStreaming: false, isCompacting: false };
     if (!heldState && process.env.RACE_STATE_HOLD && existsSync(process.env.RACE_STATE_HOLD)) {
