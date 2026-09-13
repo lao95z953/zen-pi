@@ -9,6 +9,9 @@ function bounded(value) {
   return text.length > LIMIT ? `${text.slice(0, LIMIT / 2)}\n\n[內容過長，已省略中段；保留開頭與結尾]\n\n${text.slice(-LIMIT / 2)}` : text;
 }
 const contentText = content => typeof content === 'string' ? content : (Array.isArray(content) ? content.map(block => block.type === 'text' ? block.text : block.type === 'image' ? '[圖片內容]' : '').filter(Boolean).join('\n') : '');
+export const visibleThinking = content => bounded((Array.isArray(content) ? content : [])
+  .filter(block => block?.type === 'thinking' && !block.redacted && typeof block.thinking === 'string')
+  .map(block => block.thinking).join('\n'));
 const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens', 'reasoning'];
 const counter = () => ({ requests: 0, reported: 0, missing: 0, totals: Object.fromEntries(fields.map(key => [key, null])), cost: null });
 function addUsage(counter, usage) {
@@ -34,6 +37,12 @@ export class Transcript {
     }
     return item;
   }
+  setThinking(id, text) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.thinking = bounded(text);
+    return entry;
+  }
   message(message, id, complete = true) {
     if (message.role === 'bashExecution') return this.put(id, { kind: 'tool', name: 'bash', input: bounded(message.command), output: bounded(message.output) + (message.truncated ? '\n[Pi 已截斷輸出]' : ''), state: message.cancelled ? 'aborted' : message.exitCode ? 'error' : 'done', exitCode: Number.isInteger(message.exitCode) ? message.exitCode : undefined });
     if (message.role === 'toolResult') {
@@ -45,7 +54,7 @@ export class Transcript {
     const entry = this.put(id, { kind: message.role, messageId: id, text: bounded(contentText(message.content)),
       timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
       state: complete ? (['error', 'aborted'].includes(message.stopReason) ? message.stopReason : 'done') : 'running',
-      thinking: bounded((Array.isArray(message.content) ? message.content : []).filter(b => b.type === 'thinking' && !b.redacted).map(b => b.thinking).join('\n')),
+      thinking: visibleThinking(message.content),
       error: bounded(message.errorMessage), model: bounded(assistant ? [message.provider, message.model].filter(Boolean).join(' / ') : ''),
       usage: assistant && complete ? safeUsage(message.usage) : null });
     if (assistant && complete) {

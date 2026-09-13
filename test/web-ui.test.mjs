@@ -18,6 +18,12 @@ view.collectSources({ current: { ...excerpt, content: '2: next line' } });
 assert.equal(view.sources.size, 2, 'Different delivered ranges must retain separate immutable snapshots');
 assert.equal([...view.sources.values()][0].content, '1: first line');
 assert.ok(view.snapshot().sources.every(s => !('content' in s)), 'Snapshot lists metadata; full content comes only from source ID route');
+const reasoned = view.message({ role: 'assistant', content: [
+  { type: 'thinking', thinking: '先檢查來源。' },
+  { type: 'thinking', thinking: 'Do not show this', redacted: true, thinkingSignature: 'PRIVATE-SIGNATURE' },
+] });
+assert.equal(reasoned.thinking, '先檢查來源。');
+assert.ok(!JSON.stringify(view.snapshot()).includes('PRIVATE-SIGNATURE'));
 for (let i = 0; i < 400; i++) view.message({ role: 'assistant', content: 'x'.repeat(5000) });
 assert.ok(view.messages.length <= 300);
 assert.ok(view.messages.reduce((n, m) => n + m.text.length, 0) <= 1200000);

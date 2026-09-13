@@ -450,7 +450,10 @@ function renderMessages() {
       const label = el('div', 'message-label');
       if (message.role === 'assistant') label.append(el('span', 'mini-pi', 'π'));
       label.append(document.createTextNode(message.role === 'user' ? '你' : 'Pi'));
-      node.append(label, el('div', 'message-content'), el('div', 'message-images'), el('div', 'message-error'));
+      const thinking = el('details', 'message-thinking');
+      thinking.append(el('summary', '', '思考過程'), el('div', 'message-thinking-content'));
+      if (message.role === 'assistant' && message.streaming) thinking.open = true;
+      node.append(label, thinking, el('div', 'message-content'), el('div', 'message-images'), el('div', 'message-error'));
       messageNodes.set(message.id, node); container.append(node);
     }
     const imageKey = JSON.stringify(message.images || []);
@@ -458,10 +461,18 @@ function renderMessages() {
       node._images = imageKey; const media = node.querySelector('.message-images'); media.replaceChildren();
       for (const [index, image] of (message.images || []).entries()) media.append(image.unavailable ? el('span', 'small muted', '這張圖片無法預覽') : imageButton(image, index));
     }
-    node.hidden = message.role === 'assistant' && !message.text && !message.error && !message.streaming;
-    if (node._text !== message.text || node._streaming !== message.streaming) {
-      node.querySelector('.message-content').innerHTML = markdown(message.text || (message.streaming ? '正在思考…' : ''));
-      node._text = message.text; node._streaming = message.streaming;
+    node.hidden = message.role === 'assistant' && !message.text && !message.thinking && !message.error && !message.streaming;
+    const thinking = node.querySelector('.message-thinking');
+    thinking.hidden = message.role !== 'assistant' || !message.thinking && (!message.streaming || !!message.text);
+    if (!thinking.hidden) {
+      const content = message.thinking || '模型尚未提供可顯示的思考文字；提供後會即時顯示。';
+      if (node._thinking !== content) { thinking.querySelector('.message-thinking-content').textContent = content; node._thinking = content; }
+      thinking.querySelector('summary').textContent = message.streaming ? '思考過程 · 即時' : '思考過程';
+    }
+    const displayText = message.text || (message.streaming && !message.thinking ? '正在生成回覆…' : '');
+    if (node._displayText !== displayText) {
+      node.querySelector('.message-content').innerHTML = markdown(displayText);
+      node._displayText = displayText;
     }
     node.querySelector('.message-error').textContent = message.error || '';
   }
@@ -1253,11 +1264,20 @@ function acceptEvent(event) {
   state.revision = data.revision; state.startedAt = data.startedAt; state.serverId = data.serverId; return data;
 }
 events.addEventListener('message', event => { const message = acceptEvent(event); if (!message) return; if (!state.messages.some(m => m.id === message.id)) state.messages.push(message); renderConversation(); renderTranscript(); });
+function scheduleStreamingRender() {
+  if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; renderConversation(); if (mainView === 'transcript') renderTranscript(); }); }
+}
 events.addEventListener('delta', event => {
   const data = acceptEvent(event); if (!data) return;
   const { id, delta } = data; const message = state.messages.find(m => m.id === id); if (!message) return;
   message.text += delta;
-  if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; renderConversation(); if (mainView === 'transcript') renderTranscript(); }); }
+  scheduleStreamingRender();
+});
+events.addEventListener('thinking', event => {
+  const data = acceptEvent(event); if (!data) return;
+  const message = state.messages.find(m => m.id === data.id); if (!message) return;
+  message.thinking = data.thinking;
+  scheduleStreamingRender();
 });
 events.addEventListener('transcript', event => {
   const data = acceptEvent(event); if (!data?.entry) return;

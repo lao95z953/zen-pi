@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { createImageStore } from './images.mjs';
-import { Transcript } from './transcript.mjs';
+import { Transcript, visibleThinking } from './transcript.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
@@ -84,7 +84,7 @@ export class ConversationView {
   constructor(imageStore) { this.imageStore = imageStore; this.reset(); }
   reset() {
     this.transcript = new Transcript(); this.messages = []; this.sources = new Map(); this.tools = new Map(); this.dialogs = new Map(); this.dialogTimers = new Map();
-    this.mode = 'general'; this.modeState = null; this.question = ''; this.topic = ''; this.context = null; this.focus = null; this.busy = false; this.error = ''; this.notice = ''; this.notes = []; this.status = ''; this.streaming = null; this.streamingBlocks = new Map();
+    this.mode = 'general'; this.modeState = null; this.question = ''; this.topic = ''; this.context = null; this.focus = null; this.busy = false; this.error = ''; this.notice = ''; this.notes = []; this.status = ''; this.streaming = null; this.streamingBlocks = new Map(); this.streamingThinkingBlocks = new Map();
   }
   message(message, complete = true) {
     if (!message) return;
@@ -112,13 +112,16 @@ export class ConversationView {
     if (message.role === 'toolResult') { this.transcript.message(message); this.collectResult(message.content); return; }
     if (!['user', 'assistant'].includes(message.role)) return;
     const item = { id: randomUUID(), role: message.role, streaming: !complete, text: clip(textOf(message.content), 120000), timestamp: message.timestamp || Date.now(), error: message.role === 'assistant' && message.stopReason === 'error' ? safeError(message.errorMessage || '模型回應失敗') : '' };
+    if (message.role === 'assistant') item.thinking = visibleThinking(message.content);
     const images = this.imageStore?.project(message.content) || [];
     if (images.length) item.images = images;
     this.transcript.message(message, item.id, complete); this.messages.push(item); this.trimMessages(); return item;
   }
   trimMessages() {
-    let chars = this.messages.reduce((n, m) => n + m.text.length, 0);
-    while (this.messages.length > 1 && (this.messages.length > 300 || chars > 1200000)) chars -= this.messages.shift().text.length;
+    let chars = this.messages.reduce((n, m) => n + m.text.length + (m.thinking?.length || 0), 0);
+    while (this.messages.length > 1 && (this.messages.length > 300 || chars > 1200000)) {
+      const removed = this.messages.shift(); chars -= removed.text.length + (removed.thinking?.length || 0);
+    }
   }
   collectResult(content) { const value = parsed(content); if (value) this.collectSources(value); }
   collectSources(value, depth = 0) {
@@ -324,12 +327,27 @@ export async function createWebServer(options = {}) {
     if (event.type === 'message_start' && event.message?.role === 'assistant') {
       // Pi's start event can reference a partial that has already advanced to the
       // first delta. Assemble text blocks from deltas to avoid counting it twice.
-      view.streamingBlocks.clear();
+      view.streamingBlocks.clear(); view.streamingThinkingBlocks.clear();
       view.streaming = view.message({ ...event.message, content: [] }, false); broadcast('message', view.streaming);
       broadcast('transcript', { entry: view.transcript.entries.get(view.streaming.id), omitted: view.transcript.omitted, retainedIds: [...view.transcript.entries.keys()] });
     }
     if (event.type === 'message_update') {
       const e = event.assistantMessageEvent;
+      if (view.streaming && ['thinking_start', 'thinking_delta', 'thinking_end'].includes(e?.type)) {
+        const index = Number.isInteger(e.contentIndex) ? e.contentIndex : 0;
+        const blocks = view.streamingThinkingBlocks;
+        if (!blocks.has(index) && blocks.size >= 64) return;
+        const otherLength = [...blocks].reduce((total, [key, text]) => total + (key === index ? 0 : text.length), 0);
+        const content = e.type === 'thinking_start' ? '' : e.type === 'thinking_end' ? clip(e.content, 120000) : (blocks.get(index) || '') + clip(e.delta, 120000);
+        blocks.set(index, clip(content, Math.max(0, 120000 - otherLength)));
+        const thinking = visibleThinking([{ type: 'thinking', thinking: [...blocks].sort(([a], [b]) => a - b).map(([, text]) => text).join('\n') }]);
+        if (thinking !== view.streaming.thinking) {
+          view.streaming.thinking = thinking;
+          const entry = view.transcript.setThinking(view.streaming.id, thinking);
+          broadcast('thinking', { id: view.streaming.id, thinking });
+          if (entry) broadcast('transcript', { entry, omitted: view.transcript.omitted, retainedIds: [...view.transcript.entries.keys()] });
+        }
+      }
       if (view.streaming && ['text_start', 'text_delta', 'text_end'].includes(e?.type)) {
         const index = Number.isInteger(e.contentIndex) ? e.contentIndex : 0;
         if (!view.streamingBlocks.has(index) && view.streamingBlocks.size >= 64) return;
@@ -350,6 +368,7 @@ export async function createWebServer(options = {}) {
         view.streaming.streaming = false;
         view.transcript.message(msg, view.streaming.id);
         view.streaming.text = clip(textOf(msg.content), 120000);
+        view.streaming.thinking = visibleThinking(msg.content);
         view.streaming.error = msg.stopReason === 'error' ? safeError(msg.errorMessage || '模型回應失敗') : '';
         if (view.streaming.error) view.error = view.streaming.error;
         view.streaming = null; view.trimMessages();

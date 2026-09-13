@@ -73,6 +73,28 @@ process.stdin.on('data', chunk => {
           writeFileSync(file, JSON.stringify(history)); busy = false; emit({ type: 'agent_settled' });
         }, 200);
       }
+      else if (req.message === 'thinking-stream') {
+        const user = { role: 'user', content: [{ type: 'text', text: req.message }] };
+        history.push(user); emit({ type: 'message_end', message: user });
+        busy = true; emit({ type: 'agent_start' });
+        emit({ type: 'message_start', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '先核對前提與證據。' }] } });
+        emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 } });
+        emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: '先核對前提' } });
+        answer(req);
+        const continueThinking = () => {
+          emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: '與證據。' } });
+          emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: '先核對前提與證據。' } });
+          emit({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 1 } });
+          emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: '結論正在生成。' } });
+          setTimeout(() => {
+            const message = { role: 'assistant', content: [{ type: 'thinking', thinking: '先核對前提與證據。', thinkingSignature: 'PRIVATE-SIGNATURE' }, { type: 'text', text: '結論已核對。' }], stopReason: 'stop' };
+            history.push(message); emit({ type: 'message_end', message }); busy = false; emit({ type: 'agent_settled' }); writeFileSync(file, JSON.stringify(history));
+          }, 80);
+        };
+        if (process.env.FAKE_THINKING_GATE) {
+          const timer = setInterval(() => { if (existsSync(process.env.FAKE_THINKING_GATE)) { clearInterval(timer); continueThinking(); } }, 10);
+        } else setTimeout(continueThinking, 80);
+      }
       else {
         const user = { role: 'user', content: [{ type: 'text', text: req.message }, ...req.images || []] }; history.push(user); emit({ type: 'message_end', message: user });
         busy = true; emit({ type: 'agent_start' }); emit({ type: 'message_start', message: { role: 'assistant', content: [{ type: 'text', text: '段落\u2028仍在同一則訊息\u2029。' }] } });

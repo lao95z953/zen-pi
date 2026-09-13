@@ -464,6 +464,35 @@ p:last-child {
   color:var(--accent)
 }
 
+.message-thinking {
+  margin:0 0 15px;
+  border-left:2px solid #8fa77a80;
+  padding:7px 0 7px 13px;
+  background:#22261f;
+  border-radius:0 8px 8px 0
+}
+
+.message-thinking summary {
+  cursor:pointer;
+  color:var(--accent);
+  font-size:12px;
+  list-style:none;
+  user-select:none
+}
+
+.message-thinking summary::-webkit-details-marker { display:none; }
+.message-thinking summary::before { content:'▸'; display:inline-block; margin-right:8px; transition:transform .18s ease; }
+.message-thinking[open] summary::before { transform:rotate(90deg); }
+
+.message-thinking-content {
+  color:#c2c9bc;
+  font-size:13px;
+  line-height:1.75;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  padding:9px 14px 3px 20px
+}
+
 .message.user {
   padding:15px 18px;
   border:1px solid var(--line);

@@ -734,12 +734,24 @@ const placeholders = harness(); placeholders.snapshot({ ...snapshot, busy: true,
 ] });
 const [past, current] = placeholders.nodes.get('messages').children;
 assert.equal(past.hidden, true); assert.equal(current.hidden, false);
-assert.equal(current.querySelector('.message-content').innerHTML, '正在思考…');
-placeholders.snapshot({ ...snapshot, revision: 2, messages: [
+assert.equal(current.querySelector('.message-content').innerHTML, '正在生成回覆…');
+assert.equal(current.querySelector('.message-thinking').open, true);
+assert.match(current.querySelector('.message-thinking-content').textContent, /尚未提供可顯示/);
+placeholders.events.emit('thinking', { ...snapshot, revision: 2, id: 'current', thinking: '先核對 <img src=x onerror=alert(1)>' });
+assert.equal(current.querySelector('.message-thinking-content').textContent, '先核對 <img src=x onerror=alert(1)>');
+assert.equal(current.querySelector('.message-content').innerHTML, '');
+current.querySelector('.message-thinking').open = false;
+placeholders.events.emit('thinking', { ...snapshot, revision: 3, id: 'current', thinking: '先核對前提與證據。' });
+assert.equal(current.querySelector('.message-thinking').open, false, 'Manual collapse survives streaming updates');
+placeholders.snapshot({ ...snapshot, revision: 4, messages: [
   { id: 'past', role: 'assistant', text: '', streaming: false },
   { id: 'current', role: 'assistant', text: '', streaming: false },
 ] });
 assert.equal(current.hidden, true);
+placeholders.snapshot({ ...snapshot, revision: 5, messages: [
+  { id: 'restored', role: 'assistant', text: '已回覆', thinking: '曾核對前提。', streaming: false },
+] });
+assert.equal(placeholders.nodes.get('messages').children.at(-1).querySelector('.message-thinking').open, false, 'Historical thinking starts collapsed');
 console.log('Main Transcript navigation, turn/context/history separation, stale usage and stream-only placeholders passed');
 
 const imageUI = harness(); imageUI.snapshot(snapshot);
