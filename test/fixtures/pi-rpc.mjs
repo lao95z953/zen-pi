@@ -4,6 +4,7 @@ import { join } from 'node:path';
 const args = process.argv.slice(2), sessionDir = args[args.indexOf('--session-dir') + 1];
 let file = args.includes('--session') ? args[args.indexOf('--session') + 1] : join(sessionDir, `${randomUUID()}.jsonl`);
 let history = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+const imageQueue = { steering: [], followUp: [] };
 let mode = 'general', focus = { mode: 'auto' }, busy = false, waiting, buffer = '';
 for (const msg of history) if (msg.customType === 'pi-mode-state') mode = JSON.parse(msg.content).mode;
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -24,7 +25,7 @@ process.stdin.on('data', chunk => {
   while ((index = buffer.indexOf('\n')) !== -1) {
     const line = buffer.slice(0, index); buffer = buffer.slice(index + 1); if (!line) continue;
     const req = JSON.parse(line); if (process.env.FAKE_RPC_LOG) appendFileSync(process.env.FAKE_RPC_LOG, `${JSON.stringify(req)}\n`);
-    if (req.type === 'get_state') answer(req, { sessionFile: file, sessionId: 'fake-internal-id', isStreaming: busy, model: { provider: 'local', id: 'fake', name: '測試模型', apiKey: 'DO-NOT-EXPOSE', headers: { Authorization: 'SECRET' } } });
+    if (req.type === 'get_state') answer(req, { sessionFile: file, sessionId: 'fake-internal-id', isStreaming: busy, model: { provider: 'local', id: 'fake', name: '測試模型', input: process.env.FAKE_NO_IMAGES ? ['text'] : ['text', 'image'], apiKey: 'DO-NOT-EXPOSE', headers: { Authorization: 'SECRET' } } });
     else if (req.type === 'get_commands') answer(req, { commands: ['mode', 'study', 'study-status', 'study-notes', 'test-feedback', 'confirm'].map(name => ({ name, source: 'extension' })) });
     else if (req.type === 'get_session_stats') {
       const stats = { contextUsage: process.env.FAKE_UNKNOWN_CONTEXT ? { tokens: null, contextWindow: 1000, percent: null } : { tokens: 120, contextWindow: 1000, percent: 12 }, tokens: { total: 9231931 }, apiKey: 'PRIVATE-USAGE', sessionFile: file };
@@ -35,7 +36,17 @@ process.stdin.on('data', chunk => {
     }
     else if (req.type === 'get_messages') answer(req, { messages: history });
     else if (req.type === 'new_session') { file = join(sessionDir, `${randomUUID()}.jsonl`); history = []; mode = 'general'; focus = { mode: 'auto' }; answer(req, { cancelled: false }); }
-    else if (req.type === 'clear_queue') answer(req, { steering: ['未送出的訊息'], followUp: [] });
+    else if (req.type === 'clear_queue') {
+      if (process.env.FAKE_IMAGE_QUEUES) { answer(req, { steering: imageQueue.steering.map(row => row.message), followUp: imageQueue.followUp.map(row => row.message) }); imageQueue.steering = []; imageQueue.followUp = []; }
+      else answer(req, { steering: ['未送出的訊息'], followUp: [] });
+    }
+    else if (['steer', 'follow_up'].includes(req.type)) {
+      if (req.type === 'follow_up' && process.env.FAKE_CONSUME_FOLLOW_UP) {
+        const message = { role: 'user', content: [{ type: 'text', text: req.message }, ...req.images || []] };
+        emit({ type: 'message_start', message }); history.push(message); emit({ type: 'message_end', message });
+      } else imageQueue[req.type === 'steer' ? 'steering' : 'followUp'].push(req);
+      answer(req);
+    }
     else if (req.type === 'abort') { if (busy) finish(); answer(req); }
     else if (req.type === 'extension_ui_response') { if (waiting) { answer(waiting); waiting = null; finish(); } }
     else if (req.type === 'prompt') {
@@ -63,7 +74,7 @@ process.stdin.on('data', chunk => {
         }, 200);
       }
       else {
-        const user = { role: 'user', content: [{ type: 'text', text: req.message }] }; history.push(user); emit({ type: 'message_end', message: user });
+        const user = { role: 'user', content: [{ type: 'text', text: req.message }, ...req.images || []] }; history.push(user); emit({ type: 'message_end', message: user });
         busy = true; emit({ type: 'agent_start' }); emit({ type: 'message_start', message: { role: 'assistant', content: [{ type: 'text', text: '段落\u2028仍在同一則訊息\u2029。' }] } });
         emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '段落\u2028仍在同一則訊息\u2029。' } });
         if (req.message === '/confirm') { waiting = req; emit({ type: 'extension_ui_request', id: 'dialog-1', method: 'confirm', title: '允許測試操作？' }); }

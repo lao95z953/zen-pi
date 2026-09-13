@@ -50,7 +50,7 @@ assert.ok(modelDisabledReason(snapshot, { ...ready, working: true }));
 assert.equal(modelDisabledReason({ ...snapshot, sessionId: null, online: false }, ready), '', 'The model button can safely create a first session');
 
 // A minimal DOM tests actual event handlers and delayed HTTP/SSE ordering without a browser or network.
-function harness({ width = 1280, localStorageMap = new Map(), deferredFrames = false } = {}) {
+function harness({ width = 1280, localStorageMap = new Map(), sessionStorageMap = new Map(), deferredFrames = false } = {}) {
   let document;
   class Element {
     constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.style = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.inert = false; this.open = false; this.disabled = false; this.scrollHeight = 40; this.clientHeight = 300; this.scrollTop = 0; this.className = ''; this.listeners = {}; this._text = ''; this.classList = { contains: name => this.className.split(' ').includes(name), toggle: (name, on) => { const names = new Set(this.className.split(' ').filter(Boolean)); const add = on ?? !names.has(name); if (add) names.add(name); else names.delete(name); this.className = [...names].join(' '); return add; }, add: (...names) => names.forEach(name => this.classList.toggle(name, true)), remove: (...names) => names.forEach(name => this.classList.toggle(name, false)) }; }
@@ -74,6 +74,8 @@ function harness({ width = 1280, localStorageMap = new Map(), deferredFrames = f
     addEventListener(name, handler) { this.listeners[name] = handler; }
     scrollIntoView() {}
     select() { this.selected = true; }
+    click() { this.onclick?.(); }
+    setRangeText(text) { this.value += text; }
     requestSubmit() { this.onsubmit?.({ preventDefault() {} }); }
   }
   function matches(node, selector) {
@@ -109,7 +111,7 @@ function harness({ width = 1280, localStorageMap = new Map(), deferredFrames = f
     querySelectorAll(selector) { if (selector === '[data-mode]') return modeButtons; if (selector.startsWith('#')) { const [id, sub] = selector.split(' '); return nodes.get(id.slice(1)).querySelectorAll(sub); } return [...nodes.values()].flatMap(node => node.querySelectorAll(selector)); },
     querySelector(selector) { return selector === 'body' ? body : selector.startsWith('#') ? nodes.get(selector.slice(1)) || null : body.querySelector(selector); },
   };
-  const storage = new Map(), requests = [], clipboard = [], downloads = [];
+  const storage = sessionStorageMap, requests = [], clipboard = [], downloads = [];
   const globalListeners = new Map(), frames = [];
   let events;
   class EventSource {
@@ -117,7 +119,7 @@ function harness({ width = 1280, localStorageMap = new Map(), deferredFrames = f
     addEventListener(name, handler) { this.handlers[name] = handler; }
     emit(name, value) { this.handlers[name]?.({ data: JSON.stringify(value) }); }
   }
-  const context = { ...uiState, document, EventSource, console, innerWidth: width, requestAnimationFrame: fn => deferredFrames ? frames.push(fn) : fn(), Blob,
+  const context = { ...uiState, document, EventSource, console, FileReader: class { readAsDataURL(file) { Promise.resolve().then(() => { this.result = `data:${file.type};base64,${file.fixtureData}`; this.onload(); }); } }, innerWidth: width, requestAnimationFrame: fn => deferredFrames ? frames.push(fn) : fn(), Blob,
     addEventListener: (name, handler) => { const handlers = globalListeners.get(name) || []; handlers.push(handler); globalListeners.set(name, handlers); },
     URL: { createObjectURL: blob => { downloads.push(blob); return 'blob:test-download'; }, revokeObjectURL() {} },
     navigator: { clipboard: { writeText: async text => { clipboard.push(text); } } },
@@ -739,3 +741,60 @@ placeholders.snapshot({ ...snapshot, revision: 2, messages: [
 ] });
 assert.equal(current.hidden, true);
 console.log('Main Transcript navigation, turn/context/history separation, stale usage and stream-only placeholders passed');
+
+const imageUI = harness(); imageUI.snapshot(snapshot);
+const sampleImage = { id: 'a'.repeat(64), mimeType: 'image/png', size: 68 };
+const imageFile = { type: 'image/png', size: 68, fixtureData: 'test-image-base64' };
+function pasteImage(ui, file = imageFile) {
+  let prevented = false;
+  ui.nodes.get('prompt').listeners.paste({ preventDefault() { prevented = true; }, clipboardData: { items: [{ kind: 'file', type: file.type, getAsFile: () => file }], getData: () => '' } });
+  assert.equal(prevented, true);
+}
+let textPastePrevented = false;
+imageUI.nodes.get('prompt').listeners.paste({ preventDefault() { textPastePrevented = true; }, clipboardData: { items: [{ kind: 'string', type: 'text/plain' }] } });
+assert.equal(textPastePrevented, false, 'Ordinary paste keeps native browser behavior');
+pasteImage(imageUI); await tick();
+assert.equal(imageUI.nodes.get('send').disabled, true, 'Do not send while an image is being added');
+assert.equal(imageUI.requests.length, 1); assert.equal(imageUI.requests[0].url, '/api/images');
+assert.equal(imageUI.requests[0].body.images[0].data, imageFile.fixtureData);
+imageUI.requests[0].answer({ images: [sampleImage] }); await tick();
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 1);
+assert.equal(imageUI.nodes.get('send').disabled, false, 'An image-only message can be submitted');
+assert.ok(![...imageUI.storage.values()].join('').includes(imageFile.fixtureData), 'Browser drafts store only references');
+const restoredImageUI = harness({ sessionStorageMap: imageUI.storage }); restoredImageUI.snapshot(snapshot);
+assert.equal(restoredImageUI.nodes.get('image-attachments').children.length, 1, 'Image draft survives page reload');
+imageUI.snapshot({ ...snapshot, sessionId: 'image-other', revision: 2 });
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 0);
+imageUI.snapshot({ ...snapshot, revision: 3 });
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 1, 'Returning restores only this Session image draft');
+imageUI.type('/help'); await imageUI.nodes.get('composer').onsubmit({ preventDefault() {} });
+assert.equal(imageUI.requests.length, 1, 'Commands do not silently discard attached images');
+imageUI.type('inspect'); const sendingImage = imageUI.nodes.get('composer').onsubmit({ preventDefault() {} });
+assert.deepEqual(imageUI.requests.at(-1).body.imageIds, [sampleImage.id]);
+imageUI.snapshot({ ...snapshot, sessionId: 'image-other', revision: 4 });
+imageUI.requests.at(-1).answer({ error: 'Image provider rejected request' }, false); await sendingImage;
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 0, 'A failed send restores attachments only to its original Session');
+imageUI.snapshot({ ...snapshot, revision: 5, busy: true });
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 1);
+const queuedImage = imageUI.nodes.get('queue-follow').onclick();
+assert.deepEqual(imageUI.requests.at(-1).body.imageIds, [sampleImage.id]);
+imageUI.requests.at(-1).answer({ ok: true }); await queuedImage;
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 0);
+const stoppingImage = imageUI.nodes.get('stop').onclick();
+imageUI.requests.at(-1).answer({ ok: true, restored: 'inspect', restoredImages: [sampleImage] }); await stoppingImage;
+assert.equal(imageUI.nodes.get('image-attachments').children.length, 1, 'Stopping restores queued image references');
+imageUI.nodes.get('image-attachments').children[0].querySelector('.remove-image').onclick();
+assert.equal(imageUI.nodes.get('image-attachments').hidden, true);
+pasteImage(imageUI, { ...imageFile, size: 6 * 1024 * 1024 }); await tick();
+assert.match(imageUI.nodes.get('error').textContent, /5 MiB/);
+const pendingPaste = harness(); pendingPaste.snapshot(snapshot); pasteImage(pendingPaste); await tick();
+pendingPaste.snapshot({ ...snapshot, sessionId: 'elsewhere', revision: 2 });
+pendingPaste.requests[0].answer({ images: [sampleImage] }); await tick();
+assert.equal(pendingPaste.nodes.get('image-attachments').hidden, true);
+pendingPaste.snapshot({ ...snapshot, revision: 3 });
+assert.equal(pendingPaste.nodes.get('image-attachments').children.length, 1, 'An in-flight upload is retained in its original draft');
+const filePicker = harness(); filePicker.snapshot(snapshot);
+filePicker.nodes.get('image-input').onchange({ target: { files: [imageFile], value: 'picked.png' } }); await tick();
+filePicker.requests[0].answer({ images: [sampleImage] }); await tick();
+assert.equal(filePicker.nodes.get('image-attachments').children.length, 1, 'The phone file picker shares paste attachment handling');
+console.log('Image paste/picker, preview/remove, draft reload and scope, failed send, queue recovery and size limits passed');

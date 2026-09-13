@@ -34,6 +34,7 @@ npm run web
 ## 功能與限制
 
 - Workspace 依對話工作目錄分組，列出 Web 與本機 Pi Session。Side Chat 和 Fork 顯示在父 Session 底下，可重新命名、移到回收清單與還原。
+- 輸入框可貼上圖片，或從電腦、手機選檔；提供縮圖、放大與移除。支援 PNG、JPEG、WebP、GIF，每則最多 4 張、每張 5 MiB、合計 8 MiB。圖片可隨生成中的補充訊息送出，未交付的附件可恢復至原 Session 草稿。模型需支援圖片輸入。
 - Study 根據目前筆記與已展示的來源整理 Wiki 和理解紀錄；Research 保存查證進度。來源引用記錄版本與片段，模型的推論仍需檢查。
 - Transcript 在主視窗顯示訊息、工具輸入輸出與錯誤。Token 數字以 Pi／模型回報為準；分支歷史累計包含重複讀取的快取，不等於上下文占用或帳單。
 - Sub Agent 在獨立 Pi Session 執行；程式任務使用 Git worktree。`read` 工具限制不是作業系統沙箱，結果需由主 Agent 或使用者檢查。詳見 [Sub Agent](docs/subagents.md)。

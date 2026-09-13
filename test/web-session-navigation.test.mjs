@@ -244,5 +244,6 @@ try {
   console.log('Session navigation: concurrent RPC processes, background SSE isolation, Workspace switching, saved-history Side Chat, fork/clone parent integrity and restart persistence passed without model access');
 } finally {
   eventsController?.abort(); await eventsPump;
-  await app?.close(); await rm(root, { recursive: true, force: true });
+  // The fixture may still append its SIGTERM audit after the HTTP server closes.
+  await app?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 }

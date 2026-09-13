@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createImageStore } from './images.mjs';
 import { Transcript } from './transcript.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
@@ -80,7 +81,7 @@ export class PiRpc {
 
 /** A bounded, presentation-only view; credentials/model configuration are never serialized. */
 export class ConversationView {
-  constructor() { this.reset(); }
+  constructor(imageStore) { this.imageStore = imageStore; this.reset(); }
   reset() {
     this.transcript = new Transcript(); this.messages = []; this.sources = new Map(); this.tools = new Map(); this.dialogs = new Map(); this.dialogTimers = new Map();
     this.mode = 'general'; this.modeState = null; this.question = ''; this.topic = ''; this.context = null; this.focus = null; this.busy = false; this.error = ''; this.notice = ''; this.notes = []; this.status = ''; this.streaming = null; this.streamingBlocks = new Map();
@@ -111,6 +112,8 @@ export class ConversationView {
     if (message.role === 'toolResult') { this.transcript.message(message); this.collectResult(message.content); return; }
     if (!['user', 'assistant'].includes(message.role)) return;
     const item = { id: randomUUID(), role: message.role, streaming: !complete, text: clip(textOf(message.content), 120000), timestamp: message.timestamp || Date.now(), error: message.role === 'assistant' && message.stopReason === 'error' ? safeError(message.errorMessage || '模型回應失敗') : '' };
+    const images = this.imageStore?.project(message.content) || [];
+    if (images.length) item.images = images;
     this.transcript.message(message, item.id, complete); this.messages.push(item); this.trimMessages(); return item;
   }
   trimMessages() {
@@ -147,6 +150,7 @@ export async function createWebServer(options = {}) {
   const sessionDir = join(dataDir, 'sessions');
   await fs.mkdir(sessionDir, { recursive: true, mode: 0o700 }); await fs.chmod(dataDir, 0o700); await fs.chmod(sessionDir, 0o700);
   const realSessionDir = await fs.realpath(sessionDir);
+  const imageStore = await createImageStore(join(dataDir, 'images'));
   const manifestPath = join(dataDir, 'sessions.json');
   const publicOrigin = options.publicOrigin ?? process.env.PI_WEB_PUBLIC_ORIGIN ?? '';
   const tailscaleUser = options.tailscaleUser ?? process.env.PI_WEB_TAILSCALE_USER ?? '';
@@ -198,7 +202,7 @@ export async function createWebServer(options = {}) {
   };
   // Each request and RPC event retains its own conversation across awaits.
   const contexts = new AsyncLocalStorage(), runtimes = new Map(), subagentAdmissions = new Map();
-  const makeRuntime = id => ({ id, view: new ConversationView(), rpc: undefined, modelLabel: '', generation: 0,
+  const makeRuntime = id => ({ id, view: new ConversationView(imageStore), queuedImages: { steering: [], followUp: [] }, rpc: undefined, modelLabel: '', generation: 0,
     stopping: false, runtimeCommands: undefined, loadedLocalRevision: undefined, thinkingLevel: null,
     nativeSessionId: null, epoch: 0, operation: null, queue: { steering: [], followUp: [] }, serial: Promise.resolve() });
   const emptyRuntime = makeRuntime(null);
@@ -230,7 +234,7 @@ export async function createWebServer(options = {}) {
   const snapshot = () => contexts.run(selectedRuntime(), () => ({ ...view.snapshot(), sessionId: manifest.activeId, workspaceId: manifest.workspaceId, workspaces, sessions: sessions(), deletedSessions: sessions(true),
     readOnly: active()?.origin === 'local', canContinue: active()?.origin === 'local' && active()?.readable !== false && !!selectedWorkspace()?.available,
     origin: active()?.origin || null, libraryIssueCount: libraryIssues.length, commands: commandCatalog(runtime().runtimeCommands),
-    model: runtime().modelLabel, thinkingLevel: runtime().thinkingLevel, operation: runtime().operation, queue: runtime().queue,
+    model: runtime().modelLabel, thinkingLevel: runtime().thinkingLevel, operation: runtime().operation, queue: runtime().queue, queuedImages: runtime().queuedImages,
     subagents: subagents?.list({ workspaceId: manifest.workspaceId }) || [],
     online: !!runtime().rpc && !runtime().rpc.closed && active()?.origin !== 'local', revision, startedAt, serverId }));
   async function refreshLibrary() {
@@ -307,14 +311,14 @@ export async function createWebServer(options = {}) {
   const consume = event => {
     if (event.type === 'agent_start') { view.busy = true; view.error = ''; changed(); }
     if (event.type === 'agent_settled') {
-      view.busy = false; view.transcript.settle(); if (view.streaming) view.streaming.streaming = false; view.streaming = null; runtime().queue = { steering: [], followUp: [] }; clearDialogs(); changed();
+      view.busy = false; view.transcript.settle(); if (view.streaming) view.streaming.streaming = false; view.streaming = null; runtime().queue = { steering: [], followUp: [] }; runtime().queuedImages = { steering: [], followUp: [] }; clearDialogs(); changed();
       void rememberSession().then(changed).catch(() => {});
     }
     if (event.type === 'message_start' && event.message?.role === 'user') {
-      const text = textOf(event.message.content);
+      const text = textOf(event.message.content), images = imageStore.project(event.message.content);
       for (const key of ['steering', 'followUp']) {
-        const index = runtime().queue[key].indexOf(text);
-        if (index !== -1) { runtime().queue[key].splice(index, 1); changed(); break; }
+        const index = runtime().queue[key].findIndex((message, i) => message === text && JSON.stringify(runtime().queuedImages[key][i] || []) === JSON.stringify(images));
+        if (index !== -1) { runtime().queue[key].splice(index, 1); runtime().queuedImages[key].splice(index, 1); changed(); break; }
       }
     }
     if (event.type === 'message_start' && event.message?.role === 'assistant') {
@@ -421,8 +425,7 @@ export async function createWebServer(options = {}) {
   }
   async function loadView(save = true) {
     clearDialogs(); view.reset();
-    const data = await runtime().rpc.request('get_messages');
-    let messages = data?.messages || [];
+    let messages;
     // get_messages is the model context and drops pre-compaction history. The
     // Web reader uses the saved active branch, through the existing file allowlist.
     try {
@@ -434,6 +437,7 @@ export async function createWebServer(options = {}) {
         messages = branch.flatMap(entry => entry.type === 'message' ? [entry.message] : entry.type === 'custom_message' ? [{ ...entry, role: 'custom' }] : []);
       }
     } catch { /* A new draft may not have a JSONL file yet; use Pi's memory. */ }
+    messages ??= (await runtime().rpc.request('get_messages'))?.messages || [];
     for (const message of messages) view.message(message);
     view.transcript.settle();
     // Extension state can exist before the first model message or after compaction.
@@ -577,6 +581,24 @@ export async function createWebServer(options = {}) {
     if (!body.sessionId || body.sessionId !== manifest.activeId || runtime().id !== body.sessionId) throw fail(409, '目前對話已在另一個頁面切換，請重新載入。');
     if (active()?.origin === 'local') throw fail(409, '這是本機對話紀錄；請先按「接續對話」。');
     if (!runtime().rpc || runtime().rpc.closed) throw fail(503, 'Pi 已離線，請重新開啟對話。');
+  };
+  async function promptImages(ids) {
+    const owner = runtime(), rpc = owner.rpc, epoch = owner.epoch;
+    const images = await imageStore.resolve(ids);
+    if (images.length) {
+      const state = await rpc.request('get_state');
+      if (Array.isArray(state.model?.input) && !state.model.input.includes('image')) throw fail(422, '目前模型不支援圖片，請切換可讀取圖片的模型；圖片仍保留在草稿。');
+    }
+    if (runtime() !== owner || owner.rpc !== rpc || owner.epoch !== epoch) throw fail(409, '對話已切換，圖片仍保留在原草稿。');
+    return images;
+  }
+  const restoredImages = (owner, cleared) => {
+    const result = [];
+    for (const key of ['steering', 'followUp']) {
+      const remaining = owner.queue[key].map((message, index) => ({ message, images: owner.queuedImages[key][index] || [] }));
+      for (const message of cleared[key]) { const index = remaining.findIndex(row => row.message === message); if (index !== -1) result.push(...remaining.splice(index, 1)[0].images); }
+    }
+    return result;
   };
   const requireIdle = () => { if (view.busy || runtime().stopping || runtime().operation) throw fail(409, '這個對話正在處理中，請完成或停止後再操作。'); };
   const ensureText = (value, limit = 32000) => { if (typeof value !== 'string' || !value.trim() || value.length > limit) throw fail(400, `請提供 1–${limit} 字元的文字。`); return value.trim(); };
@@ -784,10 +806,10 @@ export async function createWebServer(options = {}) {
     if (name === 'agents') return { ok: true, state: snapshot(), command: { type: 'agents' } };
     if (name === 'side') return sideChat(args);
   }
-  async function bodyOf(req) {
+  async function bodyOf(req, limit = 128 * 1024) {
     if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '') || req.headers['x-pi-web'] !== '1') throw fail(415, '請使用此網站的操作介面。');
     let length = 0, chunks = [];
-    for await (const chunk of req) { length += chunk.length; if (length > 128 * 1024) throw fail(413, '訊息太長，請分段傳送。'); chunks.push(chunk); }
+    for await (const chunk of req) { length += chunk.length; if (length > limit) throw fail(413, '訊息太長，請分段傳送。'); chunks.push(chunk); }
     try { const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!value || Array.isArray(value) || typeof value !== 'object') throw Error(); return value; } catch { throw fail(400, '請求格式錯誤。'); }
   }
   function authorize(req) {
@@ -816,6 +838,10 @@ export async function createWebServer(options = {}) {
       authorize(req);
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && staticFiles[url.pathname]) { const [file, type] = staticFiles[url.pathname]; res.setHeader('Content-Type', type); res.end(await fs.readFile(join(here, 'public', file))); return; }
+      if (req.method === 'GET' && /^\/api\/images\/[a-f0-9]{64}$/.test(url.pathname)) {
+        const image = await imageStore.read(url.pathname.split('/').at(-1));
+        res.setHeader('Content-Type', image.mimeType); res.end(image.bytes); return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/health') { json(res, { ok: true, online: !!runtime().rpc && !runtime().rpc.closed }); return; }
       if (req.method === 'GET' && url.pathname === '/api/state') { json(res, snapshot()); return; }
       if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -829,7 +855,11 @@ export async function createWebServer(options = {}) {
         const source = view.sources.get(url.pathname.split('/').at(-1)); if (!source) throw fail(404, '這個來源片段已不在目前對話中。'); json(res, source); return;
       }
       if (req.method !== 'POST') throw fail(404, '找不到此頁面。');
-      const body = await bodyOf(req);
+      const body = await bodyOf(req, url.pathname === '/api/images' ? 12 * 1024 * 1024 : undefined);
+      if (url.pathname === '/api/images') {
+        if (!workspaces.some(workspace => workspace.id === body.workspaceId && workspace.available)) throw fail(409, 'Workspace 已切換，請在原 Workspace 重新加入圖片。');
+        json(res, { images: await imageStore.upload(body.images) }); return;
+      }
       if (url.pathname === '/api/usage') {
         requireActive(body);
         if (body.workspaceId !== manifest.workspaceId) throw fail(409, 'Workspace 已切換。');
@@ -869,10 +899,11 @@ export async function createWebServer(options = {}) {
         const targetRpc = runtime().rpc, targetId = manifest.activeId; runtime().stopping = true;
         try {
           for (const d of view.dialogs.values()) targetRpc.send({ type: 'extension_ui_response', id: d.id, cancelled: true }); clearDialogs();
-          const queue = normalizeQueue(await targetRpc.request('clear_queue')); runtime().queue = { steering: [], followUp: [] };
+          const queue = normalizeQueue(await targetRpc.request('clear_queue')), images = restoredImages(runtime(), queue);
+          runtime().queue = { steering: [], followUp: [] }; runtime().queuedImages = { steering: [], followUp: [] };
           await targetRpc.request('abort', {}, 45000);
           if (runtime().rpc === targetRpc && manifest.activeId === targetId) { view.busy = false; changed(); }
-          json(res, { ok: true, restored: [...queue?.steering || [], ...queue?.followUp || []].join('\n\n') }); return;
+          json(res, { ok: true, restored: [...queue?.steering || [], ...queue?.followUp || []].join('\n\n'), restoredImages: images }); return;
         } finally { runtime().stopping = false; }
       }
       if (url.pathname === '/api/queue') {
@@ -880,17 +911,20 @@ export async function createWebServer(options = {}) {
         const owner = runtime();
         if (!['steer', 'follow_up', 'clear'].includes(body.action)) throw fail(400, '待處理訊息操作無效。');
         if (body.action === 'clear') {
-          const restored = normalizeQueue(await owner.rpc.request('clear_queue'));
-          owner.queue = { steering: [], followUp: [] }; changed(); json(res, { ok: true, state: snapshot(), restored }); return;
+          const restored = normalizeQueue(await owner.rpc.request('clear_queue')), images = restoredImages(owner, restored);
+          owner.queue = { steering: [], followUp: [] }; owner.queuedImages = { steering: [], followUp: [] }; changed(); json(res, { ok: true, state: snapshot(), restored, restoredImages: images }); return;
         }
         if (!view.busy || owner.operation || owner.stopping) throw fail(409, '只有回覆執行中可以追加指示。');
-        const message = ensureText(body.message);
+        const images = await promptImages(body.imageIds);
+        if (!owner.view.busy || owner.operation || owner.stopping) throw fail(409, '回覆狀態已變更，請重新送出。');
+        const message = images.length ? ensureText(body.message || '請查看這些圖片。') : ensureText(body.message);
         if (parseSlash(message)) throw fail(400, '指令不能排入訊息佇列；請等對話完成後執行。');
         const key = body.action === 'steer' ? 'steering' : 'followUp';
         if (owner.queue.steering.length + owner.queue.followUp.length >= 20) throw fail(429, '最多保留 20 則待處理訊息。');
-        owner.queue[key].push(message); changed();
-        try { await owner.rpc.request(body.action, { message }); }
-        catch (error) { const i = owner.queue[key].lastIndexOf(message); if (i !== -1) owner.queue[key].splice(i, 1); changed(); throw error; }
+        const attachments = imageStore.project(images);
+        owner.queue[key].push(message); owner.queuedImages[key].push(attachments); changed();
+        try { await owner.rpc.request(body.action, { message, ...(images.length ? { images } : {}) }); }
+        catch (error) { const i = owner.queuedImages[key].indexOf(attachments); if (i !== -1) owner.queue[key].splice(i, 1); if (i !== -1) owner.queuedImages[key].splice(i, 1); changed(); throw error; }
         json(res, { ok: true, state: snapshot() }); return;
       }
       // Delegated tasks remain available while the parent is running.
@@ -952,7 +986,9 @@ export async function createWebServer(options = {}) {
           requireIdle(); return changeModel(ensureText(body.provider, 200), ensureText(body.modelId, 500));
         }
         if (url.pathname === '/api/prompt') {
-          let message = ensureText(body.message);
+          const images = await promptImages(body.imageIds);
+          let message = images.length ? ensureText(body.message || '請查看這些圖片。') : ensureText(body.message);
+          if (images.length && parseSlash(message)) throw fail(400, '圖片請搭配一般訊息送出；Slash 指令不會接收圖片。');
           // RPC prompt only dispatches extension/template/skill commands. Native
           // terminal commands must be bridged here or they become model prompts.
           const command = parseSlash(message);
@@ -969,7 +1005,7 @@ export async function createWebServer(options = {}) {
           }
           requireIdle();
           view.error = ''; view.notice = ''; view.busy = true; changed();
-          try { await runtime().rpc.request('prompt', { message }, 10 * 60 * 1000); } catch (e) { view.busy = false; view.error = safeError(e); changed(); throw e; }
+          try { await runtime().rpc.request('prompt', { message, ...(images.length ? { images } : {}) }, 10 * 60 * 1000); } catch (e) { view.busy = false; view.error = safeError(e); changed(); throw e; }
           if (active().title === '新對話' && !manifest.sessionPreferences[active().id]?.title && !message.startsWith('/')) active().title = message.slice(0, 60);
           await rememberSession(); changed(); return { ok: true };
         }
