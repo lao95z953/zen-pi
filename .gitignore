@@ -3,6 +3,12 @@ node_modules
 .env
 .env.*
 !.env.example
+auth.json
+*.pem
+*.key
+*.p12
+*.jsonl
+sessions/
 .pi/
 coverage/
 eval/results/
