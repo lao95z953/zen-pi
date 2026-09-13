@@ -25,8 +25,13 @@ export function markdown(text) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
     if (/^\s*```/.test(line)) {
-      const code = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]); i++;
-      out.push(`<pre tabindex="0"><code>${escape(code.join('\n'))}</code></pre>`); continue;
+      const mermaid = /^\s*```mermaid\s*$/i.test(line);
+      const code = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
+      const closed = i < lines.length; if (closed) i++;
+      const source = escape(code.join('\n'));
+      out.push(mermaid && closed
+        ? `<figure class="mermaid-card"><figcaption>Mermaid 圖表</figcaption><div class="mermaid-toolbar"></div><div class="mermaid-preview"><p class="mermaid-status" role="status">正在繪製圖表…</p></div><details class="mermaid-source"><summary>查看原始碼</summary><pre tabindex="0"><code>${source}</code></pre></details></figure>`
+        : `<pre tabindex="0"><code>${source}</code></pre>`); continue;
     }
     const heading = line.match(/^(#{1,4})\s+(.+)/);
     if (heading) { out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); i++; continue; }

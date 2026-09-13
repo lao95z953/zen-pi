@@ -1,4 +1,5 @@
 import { markdown } from './markdown.js';
+import { renderMermaidBlocks } from './mermaid-view.js';
 import { isCurrent, selectedWorkspace, workspaceSessions, workspaceControls, draftScope, acceptsCreatedSession, mergeRestoredDraft, libraryScanWarning, composerSuggestions, commandUsage, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, agentControls, sessionInfoRows, workspaceJobs, jobDraft, metric, sessionParent, workspaceSessionRows, workspaceDeletedSessions, sessionManagementReason } from './state.js';
 const $ = id => document.getElementById(id);
 const labels = { general: '一般', study: '學習', research: '研究' };
@@ -474,6 +475,7 @@ function renderMessages() {
       node.querySelector('.message-content').innerHTML = markdown(displayText);
       node._displayText = displayText;
     }
+    renderMermaidBlocks(node.querySelector('.message-content'), { streaming: !!message.streaming });
     node.querySelector('.message-error').textContent = message.error || '';
   }
 }
