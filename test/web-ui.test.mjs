@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
 import { ConversationView } from '../web/server.mjs';
 import { markdown } from '../web/public/markdown.js';
 import { isCurrent } from '../web/public/state.js';
@@ -40,4 +41,14 @@ assert.equal(markdown('['.repeat(120000)), `<p>${'['.repeat(120000)}</p>`, 'Uncl
 assert.equal(isCurrent({ startedAt: 100, revision: 8 }, { startedAt: 100, revision: 7 }), false, 'Late HTTP response cannot undo a newer SSE snapshot');
 assert.equal(isCurrent({ startedAt: 100, revision: 8 }, { startedAt: 101, revision: 0 }), true, 'Service restart starts a new revision epoch');
 assert.equal(isCurrent({ startedAt: 101, revision: 1 }, { startedAt: 100, revision: 100 }), false, 'Late response from a stopped service cannot overwrite the new service');
+// A browser module the allow-list forgets is a 404 that breaks every import below it.
+const publicDir = new URL('../web/public/', import.meta.url);
+const allowList = readFileSync(new URL('../web/server.mjs', import.meta.url), 'utf8').split('\n').find(line => line.includes('const staticFiles')) || '';
+for (const file of readdirSync(publicDir).filter(name => name.endsWith('.js'))) {
+  assert.ok(allowList.includes(`'/${file}'`), `web/public/${file} is never served: add it to staticFiles in web/server.mjs`);
+  const source = readFileSync(new URL(file, publicDir), 'utf8');
+  for (const [, specifier] of source.matchAll(/(?:from|import)\s*\(?\s*'\.\/([^']+)'/g))
+    assert.ok(allowList.includes(`'/${specifier}'`), `${file} imports ./${specifier}, which staticFiles in web/server.mjs never serves`);
+}
+
 console.log('Web view / safe Markdown checks passed');

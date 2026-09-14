@@ -38,6 +38,7 @@ npm run web
 - Study 根據目前筆記與已展示的來源整理 Wiki 和理解紀錄；Research 保存查證進度。來源引用記錄版本與片段，模型的推論仍需檢查。
 - 模型提供思考文字時，主對話會在生成中即時顯示可收合的「思考過程」，並在重新開啟 Session 後保留。模型未提供可顯示的文字時，介面不會根據推理 Token 猜測內容。
 - Web UI 會把對話中的 `mermaid` 程式碼區塊顯示成圖表，並提供縮放與原始碼複製；圖表語法錯誤時仍可閱讀原始碼。
+- Web UI 會把對話中的 LaTeX 算式排版成 MathML，支援 `$$…$$`、`\[…\]` 與 `\(…\)`；語法有誤時保留原始 LaTeX 和 KaTeX 的錯誤說明。
 - Transcript 在主視窗顯示訊息、工具輸入輸出與錯誤。Token 數字以 Pi／模型回報為準；分支歷史累計包含重複讀取的快取，不等於上下文占用或帳單。
 - Sub Agent 在獨立 Pi Session 執行；程式任務使用 Git worktree。`read` 工具限制不是作業系統沙箱，結果需由主 Agent 或使用者檢查。詳見 [Sub Agent](docs/subagents.md)。
 - 可選用 [NVIDIA SoL-Pi](https://github.com/NVlabs/SoL-Pi) 的 Action Fusion 與 ObservationPack；Zen Pi 不內含 SoL-Pi。整合方式見 [SoL-Pi](docs/sol-pi.md)。

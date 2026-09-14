@@ -1,5 +1,6 @@
 import { markdown } from './markdown.js';
 import { renderMermaidBlocks } from './mermaid-view.js';
+import { renderMathBlocks } from './math-view.js';
 import { isCurrent, selectedWorkspace, workspaceSessions, workspaceControls, draftScope, acceptsCreatedSession, mergeRestoredDraft, libraryScanWarning, composerSuggestions, commandUsage, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, agentControls, sessionInfoRows, workspaceJobs, jobDraft, metric, sessionParent, workspaceSessionRows, workspaceDeletedSessions, sessionManagementReason } from './state.js';
 const $ = id => document.getElementById(id);
 const labels = { general: '一般', study: '學習', research: '研究' };
@@ -476,6 +477,7 @@ function renderMessages() {
       node._displayText = displayText;
     }
     renderMermaidBlocks(node.querySelector('.message-content'), { streaming: !!message.streaming });
+    renderMathBlocks(node.querySelector('.message-content'));
     node.querySelector('.message-error').textContent = message.error || '';
   }
 }
@@ -816,6 +818,7 @@ function showCompactionResult(result) {
   $('compact-result').hidden = false;
   $('compact-metrics').textContent = `壓縮前 ${metric(result.tokensBefore)} tokens · 壓縮後估計 ${metric(result.estimatedTokensAfter)} tokens`;
   $('compact-summary').innerHTML = markdown(typeof result.summary === 'string' ? result.summary : '摘要未提供。');
+  renderMathBlocks($('compact-summary'));
 }
 function showAgentCommand(command, requested) {
   controlRequest = requested;
@@ -959,7 +962,7 @@ function renderJobs() {
       details.append(review, el('p', 'small muted', '變更保留在此工作目錄，尚未合併。請檢查 diff 與測試結果。'));
     }
     const output = job.result || job.output;
-    if (output) { const content = el('div', 'job-output message-content'); content.innerHTML = markdown(String(output)); details.append(content); }
+    if (output) { const content = el('div', 'job-output message-content'); content.innerHTML = markdown(String(output)); renderMathBlocks(content); details.append(content); }
     else details.append(el('p', 'small muted', '尚未收到進度文字。'));
     if (job.truncated) details.append(el('p', 'small muted', '此處只顯示部分輸出。'));
     card.append(details);

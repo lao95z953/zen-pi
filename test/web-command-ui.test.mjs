@@ -129,6 +129,7 @@ function harness({ width = 1280, localStorageMap = new Map(), sessionStorageMap 
     fetch: (url, options) => new Promise(resolve => requests.push({ url, body: JSON.parse(options.body), answer: (data, ok = true) => resolve({ ok, json: async () => data }) })),
     markdown: text => text,
     renderMermaidBlocks() {},
+    renderMathBlocks() {},
   };
   context.window = context;
   vm.runInNewContext(readFileSync(new URL('../web/public/app.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''), context);
