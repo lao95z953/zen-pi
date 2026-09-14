@@ -1,6 +1,12 @@
 const escape = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-function inline(text, depth = 0) {
-  if (depth > 4) return escape(text);
+const mathNode = (source, mode) => {
+  const tag = mode === 'block' ? 'div' : 'span';
+  return `<${tag} class="math-${mode}" data-math="${mode}">${escape(source.trim())}</${tag}>`;
+};
+/** `$…$` also writes prices, so a bare pair needs a TeX command, or a short digit-free opening. */
+const looksLikeMath = body => /[\\^_{}]/.test(body) || (body.length <= 24 && !/^\d/.test(body) && !/[\u3000-\u9fff]/.test(body));
+const mathPattern = /(`[^`\n]+`)|\\\[([^\n]+?)\\\]|\$\$([^\n]+?)\$\$|\\\(([^\n]+?)\\\)|\$([^\s$](?:[^$\n]*[^\s$])?)\$/g;
+function emphasis(text, depth) {
   const pattern = /`([^`\n]+)`|\[([^\[\]\n]+)\]\(([^\s)]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
   let html = '', last = 0;
   for (const match of text.matchAll(pattern)) {
@@ -14,6 +20,19 @@ function inline(text, depth = 0) {
     last = match.index + match[0].length;
   }
   return html + escape(text.slice(last));
+}
+function inline(text, depth = 0) {
+  if (depth > 4) return escape(text);
+  let html = '', last = 0;
+  for (const match of text.matchAll(mathPattern)) {
+    html += emphasis(text.slice(last, match.index), depth);
+    const body = match[2] ?? match[3] ?? match[4] ?? match[5];
+    html += match[1] !== undefined || (match[5] !== undefined && !looksLikeMath(body))
+      ? emphasis(match[0], depth)
+      : mathNode(body, 'inline');
+    last = match.index + match[0].length;
+  }
+  return html + emphasis(text.slice(last), depth);
 }
 
 /** Deliberately small Markdown renderer. Raw HTML and remote image loading are excluded. */
@@ -33,6 +52,15 @@ export function markdown(text) {
         ? `<figure class="mermaid-card"><figcaption>Mermaid 圖表</figcaption><div class="mermaid-toolbar"></div><div class="mermaid-preview"><p class="mermaid-status" role="status">正在繪製圖表…</p></div><details class="mermaid-source"><summary>查看原始碼</summary><pre tabindex="0"><code>${source}</code></pre></details></figure>`
         : `<pre tabindex="0"><code>${source}</code></pre>`); continue;
     }
+    const solo = line.match(/^\s*(?:\\\[((?:(?!\\\]).)+)\\\]|\$\$([^$]+)\$\$)\s*$/);
+    if (solo) { out.push(mathNode(solo[1] ?? solo[2], 'block')); i++; continue; }
+    const fence = line.match(/^\s*(\\\[|\$\$)\s*$/);
+    if (fence) {
+      const closer = fence[1] === '$$' ? /^\s*\$\$\s*$/ : /^\s*\\\]\s*$/;
+      const body = []; let j = i + 1;
+      while (j < lines.length && !closer.test(lines[j])) body.push(lines[j++]);
+      if (j < lines.length) { out.push(mathNode(body.join('\n'), 'block')); i = j + 1; continue; }
+    }
     const heading = line.match(/^(#{1,4})\s+(.+)/);
     if (heading) { out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); i++; continue; }
     if (/^\s*(?:---+|\*\*\*+)\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
@@ -51,7 +79,7 @@ export function markdown(text) {
       out.push(`<${ordered ? 'ol' : 'ul'}>${rows.map(r => `<li>${inline(r)}</li>`).join('')}</${ordered ? 'ol' : 'ul'}>`); continue;
     }
     const paragraph = [line]; i++;
-    while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s|\s*```|\s*>|\s*[-*+]\s|\s*\d+\.\s)/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s|\s*```|\s*>|\s*[-*+]\s|\s*\d+\.\s|\s*(?:\\\[|\$\$))/.test(lines[i])) {
       if (i + 1 < lines.length && lines[i].includes('|') && /---/.test(lines[i + 1])) break;
       paragraph.push(lines[i++]);
     }

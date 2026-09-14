@@ -639,6 +639,34 @@ p:last-child {
 .mermaid-source summary { cursor:pointer; color:var(--accent) }
 .message-content .mermaid-source pre { margin:8px 0 0; font-size:12px }
 
+.math-block {
+  margin:18px 0;
+  padding:6px 2px;
+  overflow-x:auto;
+  overscroll-behavior-x:contain;
+  text-align:center
+}
+
+.math-inline { white-space:nowrap }
+
+.message-content math {
+  font-family:"Latin Modern Math","STIX Two Math",math,Georgia,serif;
+  color:var(--text)
+}
+
+.math-block math { font-size:1.12em }
+
+/* Before KaTeX loads, and whenever it cannot typeset, the raw LaTeX stays readable. */
+.math-block:not([data-math-ready="done"]),
+.math-inline:not([data-math-ready="done"]) {
+  font-family:"SFMono-Regular",Consolas,monospace;
+  font-size:.92em;
+  color:var(--muted)
+}
+
+.math-block[data-math-ready="error"],
+.math-inline[data-math-ready="error"] { color:var(--error) }
+
 .message-content hr {
   border:0;
   border-top:1px solid var(--line);
