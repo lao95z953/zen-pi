@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { excerpt, readNote, type Note } from "./notes.ts";
 import { WIKI_DIR, lintWiki, records, renderWiki, saveRecord, saveSourceSnapshot, sourceStatus, verifyCitations, visibleRecords, type Citation, type MemoryRecord } from "./memory.ts";
 import { createReadEvidence } from "./provenance.ts";
+import type { WikiMounts } from "./wikis.ts";
 import { extractPage, fetchPublic, searchWeb } from "./web.ts";
 
 export const citationSchema = Type.Object({ path: Type.String(), sha256: Type.String(), startLine: Type.Integer({ minimum: 1 }), endLine: Type.Integer({ minimum: 1 }), quote: Type.String({ minLength: 1, maxLength: 2000 }) });
@@ -11,6 +12,12 @@ const result = (value: unknown) => ({ content: [{ type: "text" as const, text: J
 const saveReceipt = (record: MemoryRecord) => ({ id: record.id, kind: record.kind, topic: record.topic, title: record.title,
   createdAt: record.createdAt, status: record.status, supersedes: record.supersedes,
   path: `${WIKI_DIR}/${record.kind === "concept" ? `concepts/${record.topic}` : `learning/${record.id}`}.md` });
+
+/** 掛載是 extension 主體注入的，單獨測試 registerMemoryTools 時會是 undefined。 */
+const requireMounts = (mounts?: WikiMounts) => {
+  if (!mounts) throw new Error("這個版本沒有啟用 Wiki 掛載。");
+  return mounts;
+};
 
 export function userEvidence(ctx: ExtensionContext) {
   const texts: { messageId: string; text: string }[] = [];
@@ -23,7 +30,7 @@ export function userEvidence(ctx: ExtensionContext) {
   return texts.slice(-6);
 }
 
-export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, current: () => Note | undefined, allowObservation = () => true) {
+export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, current: () => Note | undefined, allowObservation = () => true, mounts?: WikiMounts) {
   const evidence = createReadEvidence();
   pi.on("session_start", async () => { evidence.clear(); });
   pi.on("session_tree", async () => { evidence.clear(); });
@@ -100,18 +107,34 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
   });
 
   pi.registerCommand("wiki", {
-    description: "查看知識與學習紀錄：/wiki；/wiki check 檢查來源；/wiki rebuild 重建 Markdown；/wiki forget <id> 停用一筆紀錄（歷史保留）",
+    description: "查看知識與學習紀錄：/wiki；/wiki list 列出可掛載的 Wiki；/wiki use <名稱> 切換掛載；/wiki check 檢查來源；/wiki rebuild 重建 Markdown；/wiki forget <id> 停用一筆紀錄（歷史保留）",
     handler: async (args, ctx) => {
       try {
         const arg = args.trim();
-        if (arg === "rebuild") renderWiki(vault());
+        let switched = "";
+        if (arg === "list") {
+          const wikis = requireMounts(mounts);
+          const all = wikis.list(), now = wikis.current();
+          const lines = all.map(w => `${w.name === now ? "→" : " "} ${w.name}${w.ready ? "" : "（路徑不存在）"}  ${w.path}`);
+          if (ctx.hasUI) ctx.ui.notify(all.length
+            ? `可掛載的 Wiki：\n${lines.join("\n")}`
+            : "沒有可掛載的 Wiki：設定 PI_STUDY_VAULT，或在 ~/.pi/agent/ronny.json 的 wikis 填入 vault 路徑。", "info");
+          return;
+        }
+        if (arg.startsWith("use ")) {
+          const wikis = requireMounts(mounts);
+          if (!ctx.isIdle()) throw new Error("請等本輪完成或先停止，再切換 Wiki。");
+          wikis.use(arg.slice(4).trim());
+          switched = `已掛載 ${wikis.current()}\n`;
+        }
+        else if (arg === "rebuild") renderWiki(vault());
         else if (arg.startsWith("forget ")) {
           const target = records(vault()).find(r => r.id === arg.slice(7).trim() && r.kind !== "retraction");
           if (!target) throw new Error("找不到該紀錄 ID。");
           saveRecord(vault(), { kind: "retraction", topic: target.topic, title: `停用 ${target.title}`, body: "使用者要求停止檢索此紀錄；原始歷史保留。", target: target.id });
-        } else if (arg && arg !== "check") throw new Error("用法：/wiki [check|rebuild|forget <id>]");
+        } else if (arg && arg !== "check") throw new Error("用法：/wiki [list|use <名稱>|check|rebuild|forget <id>]");
         const health = lintWiki(vault());
-        if (ctx.hasUI) ctx.ui.notify(`Wiki ${health.records} 筆紀錄，${health.issues.length} 項待複查\n${health.issues.slice(0, 8).map(i => `${i.topic}: ${i.issue}`).join("\n")}\n${WIKI_DIR}/index.md`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`${switched}Wiki ${health.records} 筆紀錄，${health.issues.length} 項待複查\n${health.issues.slice(0, 8).map(i => `${i.topic}: ${i.issue}`).join("\n")}\n${WIKI_DIR}/index.md`, "info");
       } catch (err) { if (ctx.hasUI) ctx.ui.notify((err as Error).message, "error"); }
     },
   });

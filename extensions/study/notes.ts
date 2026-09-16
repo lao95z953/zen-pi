@@ -12,12 +12,6 @@ export type Focus = { mode: "auto" } | { mode: "manual"; path: string } |
   { mode: "pending"; query: string; candidates: string[] };
 export type Intent = { mode: "auto" } | { mode: "manual"; query: string };
 
-export function vaultRoot() {
-  const configured = process.env.PI_STUDY_VAULT;
-  if (!configured) throw new Error("請設定 PI_STUDY_VAULT 為 Obsidian vault 的絕對路徑。");
-  return realpathSync(configured);
-}
-
 export function bridgeFile(vault: string, agentDir = join(homedir(), ".pi", "agent")) {
   const id = createHash("sha256").update(realpathSync(vault)).digest("hex").slice(0, 24);
   return join(agentDir, "obsidian", `${id}.json`);

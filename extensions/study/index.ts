@@ -6,7 +6,8 @@ import { registerResearch, RESEARCH_POLICY } from "./research.ts";
 import { registerPapers } from "./papers.ts";
 import { basename } from "node:path";
 import { excerpt, fingerprint, lastWorkspaceNote, listNotes, liveNote, parseIntent, readNote,
-  relatedNotes, searchNotes, selectFocus, vaultRoot, type Focus, type Note } from "./notes.ts";
+  relatedNotes, searchNotes, selectFocus, type Focus, type Note } from "./notes.ts";
+import { defaultWikiName, knownWiki, listWikis, resolveWiki } from "./wikis.ts";
 
 const ENTRY = "pentest-study-focus-v1";
 const GENERAL_POLICY = `目前 mode=general。直接處理使用者的問題；不自動讀取 Obsidian 筆記或學習記憶，不記錄理解評量。使用者明確要求筆記或研究工具時可使用；進入學習用 /study，研究用 /research。切換模式不增加執行掃描、修改原始筆記或其他對外行動的授權。`;
@@ -27,16 +28,26 @@ concept memory 是有來源的模型整理，不保證來源或推論正確；so
 
 export default function (pi: ExtensionAPI) {
   let focus: Focus = { mode: "auto" };
+  let mount = "";
   let lastVault: string;
   let contextNotes = new Map<string, Note>();
-  const root = () => lastVault = vaultRoot();
-  const save = () => pi.appendEntry(ENTRY, { vault: root(), focus });
+  const mounted = () => mount || (mount = defaultWikiName());
+  const root = () => lastVault = resolveWiki(mounted());
+  const save = () => pi.appendEntry(ENTRY, { wiki: mounted(), vault: root(), focus });
   const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 
   function restore(ctx: ExtensionContext) {
     focus = { mode: "auto" };
+    mount = "";
     const entries = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === ENTRY);
     if (!entries.length) return;
+    // 先還原掛載，下面比對 focus 的 vault 才有正確基準；舊 entry 沒有 wiki 欄位就留給預設值。
+    for (const entry of entries) {
+      if (entry.type === "custom" && entry.customType === ENTRY) {
+        const wiki = (entry.data as { wiki?: string })?.wiki;
+        if (wiki && knownWiki(wiki)) mount = wiki;
+      }
+    }
     const vault = root();
     for (const entry of entries) {
       if (entry.type === "custom" && entry.customType === ENTRY) {
@@ -58,7 +69,13 @@ export default function (pi: ExtensionAPI) {
     return liveNote(vault);
   }
 
-  const { markRead, markContext, clearContext, assertSources } = registerMemoryTools(pi, root, () => research.state().mode === "general" ? undefined : current().note, () => research.state().mode === "study");
+  const mounts = {
+    list: listWikis,
+    current: mounted,
+    // 換掛載等於換筆記庫，舊 focus 指的是別庫的檔案，留著會讀錯。
+    use: (name: string) => { resolveWiki(name); mount = name; focus = { mode: "auto" }; save(); },
+  };
+  const { markRead, markContext, clearContext, assertSources } = registerMemoryTools(pi, root, () => research.state().mode === "general" ? undefined : current().note, () => research.state().mode === "study", mounts);
   const research = registerResearch(pi, root, assertSources);
   registerPapers(pi, root, markRead);
 

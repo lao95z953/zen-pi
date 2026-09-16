@@ -26,6 +26,28 @@ Bridge 在本機 `~/.pi/agent/obsidian/<vault-hash>.json` 存放目前頁面和�
 
 使用 Study 前設定 `PI_STUDY_VAULT=/absolute/path/to/vault`，並在該 vault 啟用 Bridge。
 
+## 掛載多個筆記庫
+
+一個對話同時只掛一個筆記庫，但可以先登記多個，再按對話切換。在 `~/.pi/agent/ronny.json` 填入：
+
+```json
+{
+  "wikis": { "cpts": "~/vaults/CPTS-Prepare", "lab": "~/vaults/Loop-Prompti-Lab" },
+  "defaultWiki": "cpts"
+}
+```
+
+`/wiki list` 列出登記的掛載點，箭頭標示目前這個對話掛在哪，路徑不存在的會標出來；`/wiki use <名稱>` 切換。
+切換只影響當前對話，狀態存在 session 裡，重開對話會還原，同時開兩個對話可以各掛各的。
+`defaultWiki` 是新對話的起點，留空就用清單第一個。
+
+沒有登記 `wikis` 時，`PI_STUDY_VAULT` 會以 `default` 這個名字成為唯一掛載點，行為跟以前一樣；
+設定檔裡同名的項目會蓋掉它。相對路徑會被忽略，否則解析結果會跟著工作目錄跑。
+
+掛載決定的是同一個筆記庫的讀與寫：研究模式搜尋的原始筆記、`07-Agent-Wiki/` 的讀寫都跟著它走。
+切換後 Obsidian 的跟隨會重設為 auto，因為原本指定的筆記屬於另一個庫。Bridge 是逐個 vault 啟用的，
+切到沒裝 Bridge 的筆記庫就沒有跟隨功能，研究模式不受影響。
+
 ## 知識與理解分開保存
 
 筆記庫的 `07-Agent-Wiki/` 包含：
@@ -52,6 +74,8 @@ URL、DNS 與重新導向都檢查公開位址，不會藉這個工具連內網�
 
 ## 維護
 
+- `/wiki list`：列出可掛載的筆記庫，並標示目前這個對話掛在哪。
+- `/wiki use <名稱>`：把目前對話切到另一個筆記庫。
 - `/wiki` 或 `/wiki check`：來源變更／消失、版本衝突、超過 30 天的學習觀察。
 - `/wiki rebuild`：由 JSON 紀錄重建 Markdown 視圖。
 - `/wiki forget <id>`：新增撤回紀錄，停止檢索，歷史仍保留；不是隱私資料的徹底刪除。

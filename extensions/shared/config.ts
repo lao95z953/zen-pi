@@ -21,6 +21,10 @@ export interface RonnyConfig {
   rules: Record<string, boolean>;
   /** 額外的「這是實驗、該去 ws 跑」判斷式,字串會當 RegExp source 編譯。 */
   extraExperimentPatterns: string[];
+  /** 可掛載的 LLM Wiki:短名 → vault 絕對路徑,可用 ~/ 開頭。 */
+  wikis: Record<string, string>;
+  /** 新對話預設掛載哪個短名。留空就用清單第一個。 */
+  defaultWiki: string;
 }
 
 const DEFAULTS: RonnyConfig = {
@@ -31,6 +35,8 @@ const DEFAULTS: RonnyConfig = {
   labFullPayload: true,
   rules: {},
   extraExperimentPatterns: [],
+  wikis: {},
+  defaultWiki: "",
 };
 
 let cached: RonnyConfig | undefined;
@@ -50,6 +56,7 @@ export function loadConfig(): RonnyConfig {
     ...DEFAULTS,
     ...overrides,
     rules: { ...DEFAULTS.rules, ...(overrides.rules ?? {}) },
+    wikis: { ...DEFAULTS.wikis, ...(overrides.wikis ?? {}) },
   };
   return cached;
 }
