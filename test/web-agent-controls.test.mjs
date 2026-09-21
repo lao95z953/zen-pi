@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { safeThinkingLevels, safeSessionInfo, safeForkMessages, safeCompactionResult, normalizeQueue } from '../web/agent-controls.mjs';
@@ -119,7 +120,7 @@ test('New Web controls are registered while unsupported terminal commands remain
 test('Known subcommand suggestions match the actual mode, study, research and wiki grammar', () => {
   const commands = safeCommands(['mode', 'study', 'research', 'wiki'].map(name => ({ name, description: name, source: 'extension', sourceInfo: { path: secret } })));
   const expected = { mode: ['/mode general', '/mode study', '/mode research', '/mode status'], study: ['/study auto', '/study status', '/study off'],
-    research: ['/research resume', '/research status', '/research off'], wiki: ['/wiki check', '/wiki rebuild', '/wiki forget'] };
+    research: ['/research resume', '/research status', '/research off'], wiki: ['/wiki list', '/wiki use ./llm-wiki', '/wiki default', '/wiki check', '/wiki rebuild', '/wiki forget'] };
   for (const command of commands) {
     assert.ok(command.usage.startsWith(`/${command.name}`));
     assert.deepEqual(command.suggestions.map(suggestion => suggestion.value), expected[command.name]);
@@ -129,7 +130,7 @@ test('Known subcommand suggestions match the actual mode, study, research and wi
   assert.ok(!JSON.stringify(commands).includes(secret));
   const catalog = commandCatalog([...commands, { name: 'model', description: secret, source: 'extension' }]);
   assert.equal(catalog.find(command => command.name === 'model').source, 'web', 'Built-in Web routing wins command name collisions');
-  assert.equal(catalog.find(command => command.name === 'wiki').suggestions.length, 3);
+  assert.deepEqual(catalog.find(command => command.name === 'wiki').suggestions.map(item => item.value), expected.wiki);
 });
 
 test('Custom suggestion metadata is projected and cannot insert another command or a hidden second line', () => {

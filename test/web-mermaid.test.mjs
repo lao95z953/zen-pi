@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import assert from 'node:assert/strict';
 import { markdown } from '../web/public/markdown.js';
 import { createMermaidRenderer } from '../web/public/mermaid-view.js';

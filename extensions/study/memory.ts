@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, existsSync, lstatSync } from "node:fs";
-import { join, relative, isAbsolute, sep } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { fingerprint, matchingSnippet, readNote, searchNotes, type Note } from "./notes.ts";
+import { fingerprint, matchingSnippet, searchNotes, type Note } from "./notes.ts";
 
-export const WIKI_DIR = "07-Agent-Wiki";
-export type Citation = { path: string; sha256: string; startLine: number; endLine: number; quote: string };
+import { WIKI_DIR, wikiPath, readStoredNote, isWikiNote, type WikiStorage } from "./storage.ts";
+export { WIKI_DIR, wikiPath } from "./storage.ts";
+export type Citation = { vault?: string; path: string; sha256: string; startLine: number; endLine: number; quote: string };
 export type RecordKind = "concept" | "learning" | "research" | "web" | "retraction";
 export type PaperMetadata = { provider: "arxiv" | "crossref"; id: string; title: string; authors: string[]; published?: string; updated?: string; doi?: string; venue?: string; url: string; abstract?: string; publicationType: string };
 export type MemoryRecord = {
@@ -15,22 +15,7 @@ export type MemoryRecord = {
   sourceVersion?: { sha256: string; fetchedAt: string; startPage?: number; endPage?: number; totalPages?: number };
 };
 
-export function wikiPath(vault: string, ...parts: string[]) {
-  const root = realpathSync(vault), base = join(root, WIKI_DIR), path = join(base, ...parts);
-  const scoped = relative(base, path);
-  if (scoped.startsWith(`..${sep}`) || scoped === ".." || isAbsolute(scoped)) throw new Error("Invalid wiki path");
-  const rel = relative(root, path);
-  let parent = root;
-  for (const part of rel.split(sep)) {
-    parent = join(parent, part);
-    try {
-      if (lstatSync(parent).isSymbolicLink()) throw new Error("Wiki 路徑含 symlink，停止寫入。");
-    } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
-  }
-  return path;
-}
-
-export function records(vault: string): MemoryRecord[] {
+export function records(vault: WikiStorage): MemoryRecord[] {
   const dir = wikiPath(vault, ".records");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).map(name => {
@@ -48,7 +33,7 @@ export function visibleRecords(all: MemoryRecord[]) {
   return all.filter(r => r.kind !== "retraction" && !removed.has(r.id) && !superseded.has(r.id));
 }
 
-export function initWiki(vault: string) {
+export function initWiki(vault: WikiStorage) {
   for (const dir of [".records", "concepts", "learning", "research", "sources"]) mkdirSync(wikiPath(vault, dir), { recursive: true });
   const schema = wikiPath(vault, "schema.md");
   if (!existsSync(schema)) writeFileSync(schema, `# Agent Wiki 使用規則
@@ -69,7 +54,7 @@ export function initWiki(vault: string) {
 `, { flag: "wx", mode: 0o600 });
 }
 
-export function saveRecord(vault: string, data: Omit<MemoryRecord, "version" | "id" | "createdAt">): MemoryRecord {
+export function saveRecord(vault: WikiStorage, data: Omit<MemoryRecord, "version" | "id" | "createdAt">): MemoryRecord {
   if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(data.topic)) throw new Error("topic 必須是小寫英文、數字或連字號，例如 reverse-shell。");
   if (!data.title.trim() || !data.body.trim() || data.body.length > 20000) throw new Error("需提供 title、body；body 上限 20000 字元。");
   initWiki(vault);
@@ -84,7 +69,13 @@ export function saveRecord(vault: string, data: Omit<MemoryRecord, "version" | "
       r.sessionId === data.sessionId && r.messageId === data.messageId && r.question === data.question);
     if (duplicate) return duplicate;
   }
-  const record: MemoryRecord = { ...data, version: 1, id: randomUUID(), createdAt: new Date().toISOString() };
+  const sources = data.sources?.map(source => {
+    if (typeof vault === "string") return source;
+    // Bind citations to the configured source vault, never to a model-supplied path.
+    const { vault: _provided, ...citation } = source;
+    return !isWikiNote(source.path) && vault.sourceVault ? { ...citation, vault: vault.sourceVault } : citation;
+  });
+  const record: MemoryRecord = { ...data, ...(sources ? { sources } : {}), version: 1, id: randomUUID(), createdAt: new Date().toISOString() };
   const temp = wikiPath(vault, ".records", `.${record.id}.tmp`);
   writeFileSync(temp, JSON.stringify(record, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   renameSync(temp, wikiPath(vault, ".records", `${record.id}.json`));
@@ -96,7 +87,7 @@ export function saveRecord(vault: string, data: Omit<MemoryRecord, "version" | "
 }
 
 /** Identical visible snapshots retain their source ID; retracted snapshots are never reused. */
-export function saveSourceSnapshot(vault: string, data: Omit<MemoryRecord, "version" | "id" | "createdAt"> & { kind: "web" }) {
+export function saveSourceSnapshot(vault: WikiStorage, data: Omit<MemoryRecord, "version" | "id" | "createdAt"> & { kind: "web" }) {
   const versionKey = (r: typeof data | MemoryRecord) => r.sourceVersion ?
     JSON.stringify([r.sourceVersion.sha256, r.sourceVersion.startPage, r.sourceVersion.endPage, r.sourceVersion.totalPages]) : "";
   const existing = visibleRecords(records(vault)).find(r => r.kind === "web" && r.topic === data.topic &&
@@ -110,8 +101,8 @@ function atomicText(path: string, text: string) {
   writeFileSync(temp, text, { flag: "wx", mode: 0o600 }); renameSync(temp, path);
 }
 
-export function sourceStatus(vault: string, source: Citation) {
-  try { return fingerprint(readNote(vault, source.path).text) === source.sha256 ? "current" : "changed"; }
+export function sourceStatus(vault: WikiStorage, source: Citation) {
+  try { return fingerprint(readStoredNote(vault, source.path, source.vault).text) === source.sha256 ? "current" : "changed"; }
   catch { return "missing"; }
 }
 
@@ -119,7 +110,7 @@ function recordPage(r: MemoryRecord) {
   return r.kind === "concept" ? `concepts/${r.topic}.md` : r.kind === "research" ? `research/${r.topic}.md` : r.kind === "web" ? `sources/${r.id}.md` : `learning/${r.id}.md`;
 }
 
-export function renderWiki(vault: string) {
+export function renderWiki(vault: WikiStorage) {
   initWiki(vault);
   const all = records(vault), live = visibleRecords(all);
   const entries: string[] = [];
@@ -140,12 +131,12 @@ export function renderWiki(vault: string) {
       return `# ${r.title}\n\n紀錄：\`${r.id}\` · ${r.createdAt}\n${r.url ? `\n來源：${r.url}\n` : ""}${r.kind === "learning" && r.status ? `\n學習觀察：${r.status}（模型依回答判斷，不是考試認證）\n` : ""}\n${r.body}\n${r.evidence ? `\n## 回答證據\n\n> ${r.evidence.replace(/\n/g, "\n> ")}\n\n情境：${r.question}\n\n下一題：${r.nextQuestion || "未指定"}\n` : ""}${sources ? `\n## 來源\n\n${sources}\n` : ""}`;
     });
     atomicText(wikiPath(vault, file), `${revisions.length > 1 ? "# ⚠ 並行版本衝突：以下版本都需保留並檢查\n\n" : ""}${parts.join("\n---\n\n")}`);
-    entries.push(`- [[${WIKI_DIR}/${file.replace(/\.md$/, "")}]] — ${revisions[0].title}${revisions.length > 1 ? "（衝突）" : ""}`);
+    entries.push(`- [[${typeof vault === "string" ? `${WIKI_DIR}/` : ""}${file.replace(/\.md$/, "")}]] — ${revisions[0].title}${revisions.length > 1 ? "（衝突）" : ""}`);
   }
   atomicText(wikiPath(vault, "index.md"), `# 學習與研究 Wiki\n\nAgent 維護的衍生內容；原始筆記保留原樣。來源 changed／missing 時需重新查證。\n\n${entries.join("\n")}\n`);
 }
 
-export function verifyCitations(vault: string, sources: Citation[], getNote = (path: string) => readNote(vault, path)) {
+export function verifyCitations(vault: WikiStorage, sources: Citation[], getNote = (path: string) => readStoredNote(vault, path)) {
   if (!sources.length || sources.length > 8) throw new Error("概念頁需有 1–8 個實際閱讀過的來源。");
   for (const source of sources) {
     if (source.path.startsWith(`${WIKI_DIR}/`) && !source.path.startsWith(`${WIKI_DIR}/sources/`)) throw new Error("請引用原始筆記或已抓取網頁，不能用生成的概念頁互相證明。");
@@ -157,7 +148,7 @@ export function verifyCitations(vault: string, sources: Citation[], getNote = (p
   }
 }
 
-export function memoryContext(vault: string, query: string, limit = 5, kinds: RecordKind[] = ["concept", "research", "learning"]) {
+export function memoryContext(vault: WikiStorage, query: string, limit = 5, kinds: RecordKind[] = ["concept", "research", "learning"]) {
   const live = visibleRecords(records(vault));
   const latestLearning = new Map<string, MemoryRecord>();
   for (const r of live.filter(r => r.kind === "learning").sort((a,b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))) {
@@ -182,7 +173,7 @@ export function memoryContext(vault: string, query: string, limit = 5, kinds: Re
   });
 }
 
-export function lintWiki(vault: string) {
+export function lintWiki(vault: WikiStorage) {
   const live = visibleRecords(records(vault));
   return { records: live.length, issues: live.flatMap(r => {
     const issues = (r.sources || []).filter(s => sourceStatus(vault, s) !== "current").map(s => ({ id: r.id, topic: r.topic, issue: `來源 ${sourceStatus(vault, s)}`, path: s.path }));

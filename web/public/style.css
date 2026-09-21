@@ -17,14 +17,24 @@
   box-sizing:border-box
 }
 
+html {
+  width:100%;
+  height:100%;
+  overflow:clip;
+}
+
 body {
+  position:fixed;
+  inset:0;
+  width:100%;
   margin:0;
   display:grid;
   grid-template-columns:244px minmax(0,1fr) 296px;
+  grid-template-rows:minmax(0,1fr);
   background:var(--bg);
   color:var(--text);
   height:100dvh;
-  overflow:hidden;
+  overflow:clip;
   font-size:14px;
   line-height:1.65
 }
@@ -275,6 +285,9 @@ p:last-child {
 }
 
 .workspace {
+  height:100%;
+  max-height:100dvh;
+  overflow:clip;
   display:flex;
   flex-direction:column;
   min-width:0;
@@ -371,7 +384,8 @@ p:last-child {
 }
 
 .chat-scroll {
-  flex:1;
+  flex:1 1 0;
+  min-width:0;
   min-height:0;
   overflow:auto;
   overscroll-behavior:contain;
@@ -1992,7 +2006,7 @@ p:last-child {
     box-shadow:none;
   }
   .desktop-layout>.sidebar { display:flex; }
-  .desktop-layout>.sources-panel { display:block; }
+  .desktop-layout>.sources-panel { display:flex; }
   .desktop-layout .panel-close { display:grid; }
   .desktop-layout #backdrop { display:none!important; }
   .desktop-layout .messages,.desktop-layout .composer { max-width:860px; }
@@ -2140,4 +2154,30 @@ p:last-child {
   .image-attachment .image-preview { width:88px; height:88px; }
   .remove-image { width:44px; height:44px; }
   .composer-bottom .model-button { min-width:0; }
+}
+
+/* The viewport owns the frame; each content pane owns its scrolling. */
+.sidebar { overflow:hidden; min-width:0; }
+.sidebar > :not(#session-list) { flex-shrink:0; }
+#session-list { overscroll-behavior:contain; }
+.sources-panel { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.sources-panel > .panel-heading,.sources-panel > .panel-tabs { flex-shrink:0; }
+#source-pane,#agent-pane { flex:1 1 0; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.reading-toolbar { position:relative; z-index:3; background:var(--bg); }
+.chat-scroll { overflow-x:hidden; }
+#conversation-pane,#transcript-pane { min-width:0; max-width:100%; }
+.notice,.error { flex-shrink:0; max-height:14dvh; overflow:auto; overscroll-behavior:contain; }
+#conversation-controls { max-height:40dvh; overflow:auto; overscroll-behavior:contain; }
+@media(max-width:1199px) { .sources-panel.open { display:flex; } }
+@media(max-width:767px) { .sources-panel { display:none; } }
+@media(max-height:600px) {
+  #conversation-controls { max-height:28dvh; }
+  .sidebar { padding-top:12px; padding-bottom:10px; }
+  .brand { margin-bottom:12px; }
+  .sidebar .new-button { margin-top:10px; margin-bottom:8px; padding-top:9px; padding-bottom:9px; }
+  .session-toolbar { margin-top:8px; }
+  .sidebar-footer { padding-top:8px; margin-top:8px; }
+  #workspace-path { max-height:3.4em; }
+  .composer textarea { max-height:18dvh; }
+  .image-attachments { max-height:15dvh; }
 }

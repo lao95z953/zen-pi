@@ -1,10 +1,11 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeLoader, makeApi, makeCtx, fire, test, assert, assertIncludes, report } from "./harness.mjs";
 const temp=mkdtempSync(join(tmpdir(),"pi-study-memory-")),vault=join(temp,"vault");mkdirSync(vault);
 const original="# NAT 與 Reverse Shell\nNAT 保存轉譯對應。\n回連需要可到達的監聽端。\n";
-writeFileSync(join(vault,"NAT.md"),original);process.env.PI_STUDY_VAULT=vault;
+writeFileSync(join(vault,"NAT.md"),original);process.env.PI_STUDY_VAULT=vault;process.env.PI_LLM_WIKI=join(vault,"07-Agent-Wiki");
 const j=await makeLoader(),m=await j.import(resolve("extensions/study/memory.ts")),n=await j.import(resolve("extensions/study/notes.ts"));
 const {boundedContext,default:factory}=await j.import(resolve("extensions/study/index.ts"));
 const citation={path:"NAT.md",sha256:n.fingerprint(original),startLine:2,endLine:3,quote:"NAT 保存轉譯對應。"};
@@ -29,11 +30,11 @@ await test("未讀來源不能編 wiki；更新需正確舊版本",async()=>{
   await rejects(()=>tool.execute("t",args,undefined,undefined,ctx),"尚未讀取");
   await api._tools.get("study_read").execute("t",{path:"NAT.md"},undefined,undefined,ctx);
   const saved=JSON.parse((await tool.execute("t",args,undefined,undefined,ctx)).content[0].text);
-  assert(saved.kind==="concept"&&saved.status==="source-derived"&&saved.path==="07-Agent-Wiki/concepts/nat-basics.md");
+  assert(saved.kind==="concept"&&saved.status==="source-derived"&&saved.path===join(vault,"07-Agent-Wiki/concepts/nat-basics.md"));
   assert(!("body" in saved)&&!("sources" in saved),"保存收據不應重送正文或引文");
   const recalled=JSON.parse((await api._tools.get("study_memory").execute("t",{id:saved.id},undefined,undefined,ctx)).content[0].text).records[0];
-  assert(recalled.body===args.body&&JSON.stringify(recalled.sources)===JSON.stringify(args.sources));
-  assertIncludes(readFileSync(join(vault,saved.path),"utf8"),args.body);
+  assert(recalled.body===args.body&&JSON.stringify(recalled.sources)===JSON.stringify(args.sources.map(source=>({...source,vault}))));
+  assertIncludes(readFileSync(saved.path,"utf8"),args.body);
   await rejects(()=>tool.execute("t",args,undefined,undefined,ctx),"版本已改變");
   const revision=JSON.parse((await tool.execute("t",{...args,supersedes:saved.id,body:"加入前提條件"},undefined,undefined,ctx)).content[0].text);
   assert(revision.supersedes===saved.id&&revision.id!==saved.id);
@@ -87,7 +88,7 @@ await test("學習觀察驗證使用者原話，拒絕助手和假證據，重�
   await rejects(()=>tool.execute("t",{...params,evidence:"使用者沒有說過這一句回答"},undefined,undefined,ctx),"證據");
   const receipt=JSON.parse((await tool.execute("t",params,undefined,undefined,ctx)).content[0].text);
   const retry=JSON.parse((await tool.execute("t",params,undefined,undefined,ctx)).content[0].text);
-  assert(retry.id===receipt.id&&receipt.kind==="learning"&&receipt.path===`07-Agent-Wiki/learning/${receipt.id}.md`);
+  assert(retry.id===receipt.id&&receipt.kind==="learning"&&receipt.path===join(vault,`07-Agent-Wiki/learning/${receipt.id}.md`));
   assert(!("body" in receipt)&&!("evidence" in receipt)&&!("question" in receipt),"保存收據不應重送理解證據");
   const recalled=JSON.parse((await api._tools.get("study_memory").execute("t",{id:receipt.id},undefined,undefined,ctx)).content[0].text).records[0];
   assert(recalled.body===params.reasoning&&recalled.evidence===quote&&recalled.question===params.question&&recalled.nextQuestion===params.nextQuestion);

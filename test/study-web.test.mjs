@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { resolve } from "node:path";
 import { makeLoader, test, assert, assertIncludes, report } from "./harness.mjs";
 const j=await makeLoader(),w=await j.import(resolve("extensions/study/web.ts"));

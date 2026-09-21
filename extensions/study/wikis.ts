@@ -1,52 +1,63 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { loadConfig } from "../shared/config.ts";
+import { checkedDirectory, WIKI_DIR } from "./storage.ts";
 
-/** `PI_STUDY_VAULT` 沒有名字，列進清單時用這個保留名稱；設定檔可以用同名蓋掉它。 */
-export const ENV_WIKI = "default";
-export type Wiki = { name: string; path: string; ready: boolean };
-/** 掛載控制面，由 extension 主體提供當前 session 的狀態。 */
-export type WikiMounts = { list: () => Wiki[]; current: () => string; use: (name: string) => void };
-
+export type Wiki = { name: string; path: string; ready: boolean; legacy?: boolean };
+export type WikiMount = { path: string; name?: string };
+export type WikiMounts = { list: () => Wiki[]; current: () => string; use: (name: string, cwd: string) => void; reset: () => void };
 const expand = (path: string) => path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+const ready = (path: string) => { try { return statSync(checkedDirectory(path)).isDirectory(); } catch { return false; } };
 
-/**
- * 可掛載的 wiki：`~/.pi/agent/ronny.json` 的 wikis 加上 `PI_STUDY_VAULT`。
- * 路徑不存在的仍然列出（ready=false），否則使用者看不出是名字打錯還是 vault 被搬走。
- */
+export function defaultWikiPath(): string {
+  const path = expand(process.env.PI_LLM_WIKI || join(homedir(), ".pi", "llm-wiki"));
+  if (!isAbsolute(path)) throw new Error("PI_LLM_WIKI 必須是絕對路徑。");
+  return resolve(path);
+}
+
+/** New aliases point directly at a Wiki. Legacy aliases still point at vault/07-Agent-Wiki. */
 export function listWikis(): Wiki[] {
-  const wikis: Wiki[] = [];
-  const add = (name: string, raw: string) => {
-    const path = expand(raw);
-    if (!isAbsolute(path) || wikis.some(w => w.name === name)) return;
-    wikis.push({ name, path, ready: existsSync(path) });
+  const config = loadConfig(true), path = defaultWikiPath();
+  const all: Wiki[] = [{ name: "default", path, ready: ready(path) }];
+  const add = (name: string, raw: unknown, legacy = false) => {
+    if (!name || typeof raw !== "string" || !isAbsolute(expand(raw)) || all.some(w => w.name === name)) return;
+    const path = resolve(expand(raw), ...(legacy ? [WIKI_DIR] : []));
+    all.push({ name, path, ready: ready(path), ...(legacy ? { legacy: true } : {}) });
   };
-  for (const [name, path] of Object.entries(loadConfig().wikis)) if (name && typeof path === "string") add(name, path);
-  if (process.env.PI_STUDY_VAULT) add(ENV_WIKI, process.env.PI_STUDY_VAULT);
-  return wikis;
+  for (const [name, path] of Object.entries(config.llmWikis)) add(name, path);
+  for (const [name, path] of Object.entries(config.wikis)) add(name, path, true);
+  return all;
 }
 
-/** 新對話的預設掛載：設定檔指名的那個，否則清單第一個。 */
-export function defaultWikiName(): string {
-  const wikis = listWikis(), preferred = loadConfig().defaultWiki;
-  if (preferred && wikis.some(w => w.name === preferred)) return preferred;
-  return wikis[0]?.name ?? ENV_WIKI;
+export function mountWiki(input: string, cwd: string): WikiMount {
+  const target = input.trim();
+  const alias = listWikis().find(w => w.name === target);
+  if (alias) return { path: checkedDirectory(alias.path, true), name: alias.name };
+  if (!isAbsolute(target) && !/^(?:\.\.?\/|~\/)/.test(target)) throw new Error("請用 /wiki use ./llm-wiki、絕對路徑或 /wiki list 中的名稱。");
+  return { path: checkedDirectory(resolve(cwd, expand(target)), true) };
 }
 
-export function knownWiki(name: string): boolean {
-  return listWikis().some(w => w.name === name);
-}
-
-/** 解析成 realpath。失敗時把可用名稱一起講出來，否則使用者只能猜。 */
-export function resolveWiki(name: string): string {
-  const wikis = listWikis();
-  if (!wikis.length) throw new Error("沒有可掛載的 Wiki：請設定 PI_STUDY_VAULT，或在 ~/.pi/agent/ronny.json 的 wikis 填入 vault 絕對路徑。");
-  const hit = wikis.find(w => w.name === name);
-  if (!hit) throw new Error(`找不到 Wiki「${name}」。可用：${wikis.map(w => w.name).join("、")}`);
-  try {
-    return realpathSync(hit.path);
-  } catch {
-    throw new Error(`Wiki「${name}」的路徑無法讀取：${hit.path}`);
+/** Saved paths never follow cwd, an edited alias, or a removed alias to a different folder. */
+export function resolveMount(mount: WikiMount): string {
+  if (mount.name && mount.name !== "default") {
+    const alias = listWikis().find(w => w.name === mount.name);
+    if (!alias || alias.path !== mount.path) throw new Error(`Wiki「${mount.name}」的設定已移除或改變，請重新 /wiki use；未切換到其他資料夾。`);
   }
+  if (!ready(mount.path)) throw new Error(`Wiki 掛載無法使用：${mount.path}。請確認目錄或重新 /wiki use；未改用預設位置。`);
+  return realpathSync(mount.path);
+}
+
+/** Source notes remain independent of the LLM Wiki mount. */
+export function sourceVaultPath(): string | undefined {
+  const config = loadConfig(true);
+  const raw = process.env.PI_STUDY_VAULT || (config.defaultWiki ? config.wikis[config.defaultWiki] : undefined);
+  if (!raw) return undefined;
+  const path = expand(raw);
+  if (!isAbsolute(path)) throw new Error("PI_STUDY_VAULT 必須是絕對路徑。");
+  return resolve(path);
+}
+export function resolveSourceVault(path = sourceVaultPath()): string {
+  if (!path || !existsSync(path) || !statSync(path).isDirectory()) throw new Error("來源筆記庫尚未就緒，請設定 PI_STUDY_VAULT；LLM Wiki 掛載不會改變來源筆記庫。");
+  return realpathSync(path);
 }

@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";

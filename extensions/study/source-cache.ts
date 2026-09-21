@@ -1,3 +1,4 @@
+import type { WikiStorage } from "./storage.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { wikiPath } from "./memory.ts";
@@ -10,7 +11,7 @@ type FetchBytes = typeof fetchPublicBytes;
 type CacheEntry = { version: 1; requestedUrl: string; url: string; sha256: string; fetchedAt: string; checkedAt: string; contentType: string; size: number };
 type CacheOptions = { refresh?: boolean; signal?: AbortSignal; fetchBytes?: FetchBytes; maxCacheBytes?: number; maxEntries?: number; now?: () => Date };
 const hash = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
-const cachePath = (vault: string, name?: string) => wikiPath(vault, ".cache", "pdf", ...(name ? [name] : []));
+const cachePath = (vault: WikiStorage, name?: string) => wikiPath(vault, ".cache", "pdf", ...(name ? [name] : []));
 const pending = new Map<string, Promise<void>>();
 
 function waitForTurn(previous: Promise<void>, signal?: AbortSignal) {
@@ -36,7 +37,7 @@ async function serialize<T>(key: string, signal: AbortSignal | undefined, operat
   finally { release(); }
 }
 
-function atomicWrite(vault: string, name: string, data: string | Buffer) {
+function atomicWrite(vault: WikiStorage, name: string, data: string | Buffer) {
   const tempName = `.${randomUUID()}.tmp`, temp = cachePath(vault, tempName);
   try {
     writeFileSync(temp, data, { flag: "wx", mode: 0o600 });
@@ -46,7 +47,7 @@ function atomicWrite(vault: string, name: string, data: string | Buffer) {
   }
 }
 
-function readEntry(vault: string, name: string): CacheEntry | undefined {
+function readEntry(vault: WikiStorage, name: string): CacheEntry | undefined {
   try {
     const file = cachePath(vault, name);
     if (statSync(file).size > 16384) throw new Error("PDF cache 索引超過上限。");
@@ -64,7 +65,7 @@ function readEntry(vault: string, name: string): CacheEntry | undefined {
   }
 }
 
-function readBlob(vault: string, entry: CacheEntry) {
+function readBlob(vault: WikiStorage, entry: CacheEntry) {
   try {
     const file = cachePath(vault, `${entry.sha256}.pdf`), size = statSync(file).size;
     if (size !== entry.size || size > MAX_PDF_BYTES) throw new Error("PDF cache 檔案大小不符。");
@@ -78,7 +79,7 @@ function readBlob(vault: string, entry: CacheEntry) {
 }
 
 /** Eviction only touches managed cache names; immutable source records are retained. */
-function evict(vault: string, preserve: string, maxBytes: number, maxEntries: number) {
+function evict(vault: WikiStorage, preserve: string, maxBytes: number, maxEntries: number) {
   const names = readdirSync(cachePath(vault));
   const entries = names.filter(name => /^[a-f0-9]{64}\.json$/.test(name)).map(name => ({
     name, entry: readEntry(vault, name)!, accessed: statSync(cachePath(vault, name)).mtimeMs,
@@ -99,12 +100,12 @@ function evict(vault: string, preserve: string, maxBytes: number, maxEntries: nu
 }
 
 /** A cache hit is a saved version, never a claim that the URL is still current. */
-export async function cachedPDF(vault: string, rawUrl: string, options: CacheOptions = {}) {
+export async function cachedPDF(vault: WikiStorage, rawUrl: string, options: CacheOptions = {}) {
   const url = publicURL(rawUrl).href;
   return serialize(`${cachePath(vault)}\0${url}`, options.signal, () => loadCachedPDF(vault, url, options));
 }
 
-async function loadCachedPDF(vault: string, rawUrl: string, options: CacheOptions) {
+async function loadCachedPDF(vault: WikiStorage, rawUrl: string, options: CacheOptions) {
   const requestedUrl = publicURL(rawUrl).href, name = `${hash(requestedUrl)}.json`;
   const maxBytes = options.maxCacheBytes ?? MAX_PDF_CACHE_BYTES, maxEntries = options.maxEntries ?? MAX_PDF_CACHE_URLS;
   if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_PDF_CACHE_BYTES || !Number.isInteger(maxEntries) || maxEntries < 1 || maxEntries > MAX_PDF_CACHE_URLS) throw new Error("PDF cache 容量設定不合法。");

@@ -1,15 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { registerMemoryTools, userEvidence } from "./memory-tools.ts";
-import { memoryContext } from "./memory.ts";
+import { memoryContext, records } from "./memory.ts";
 import { registerResearch, RESEARCH_POLICY } from "./research.ts";
 import { registerPapers } from "./papers.ts";
-import { basename } from "node:path";
+import { basename, join, isAbsolute } from "node:path";
 import { excerpt, fingerprint, lastWorkspaceNote, listNotes, liveNote, parseIntent, readNote,
   relatedNotes, searchNotes, selectFocus, type Focus, type Note } from "./notes.ts";
-import { defaultWikiName, knownWiki, listWikis, resolveWiki } from "./wikis.ts";
+import { defaultWikiPath, mountWiki, resolveMount, listWikis, resolveSourceVault, sourceVaultPath, type WikiMount } from "./wikis.ts";
+import { WIKI_DIR, checkedDirectory, readStoredNote, isWikiNote, type WikiStorage } from "./storage.ts";
 
 const ENTRY = "pentest-study-focus-v1";
+const MOUNT_ENTRY = "zen-pi-wiki-mount-v1";
 const GENERAL_POLICY = `目前 mode=general。直接處理使用者的問題；不自動讀取 Obsidian 筆記或學習記憶，不記錄理解評量。使用者明確要求筆記或研究工具時可使用；進入學習用 /study，研究用 /research。切換模式不增加執行掃描、修改原始筆記或其他對外行動的授權。`;
 const POLICY = `你是使用者的 Pentest 學習夥伴。用繁體中文、技術名詞保留原文。
 回答與筆記相關的問題前，依本輪 study-context 中的目前筆記與關聯來源作答，引用實際的相對路徑和行號。
@@ -23,38 +25,55 @@ study-context 是本輪最新快照；舊輪次的編輯器快照可能過時。
 concept memory 是有來源的模型整理，不保證來源或推論正確；source-derived 不代表權威認證。freshness 為 changed/missing 或 conflict=true 時必須先複查，不把舊結論當事實。
 你需要主動維護 Wiki：首次深入討論一個概念或補充了新來源後，用 study_wiki 整理機制、成立條件、反例、與其他概念的連結。先讀 study_memory 避免重複，更新提供 supersedes。每個重要主張附來源；矛盾列出來，不靜默選一方。
 使用者回答情境題、解釋原因後，用 study_observe 記下觀察、原話和下一個待驗證問題。從 recentUserMessages 選真正的回答證據；提問、教材引用、指定篇名不算理解證據。這是模型的學習觀察，不是考試分數。寫入失敗時明說，不能宣稱已記住。
-下一次談到相關主題時，參考 learning memory 的誤解與下一題，但不要每次聊天都考試。原始筆記預設只讀，整理都寫進 07-Agent-Wiki；修改原始筆記需使用者要求。
+下一次談到相關主題時，參考 learning memory 的誤解與下一題，但不要每次聊天都考試。原始筆記預設只讀，整理都寫進目前掛載的 LLM Wiki；修改原始筆記需使用者要求。
 不要直接搜尋 HTB 靶機解答來取代概念學習，除非使用者要求。`;
 
 export default function (pi: ExtensionAPI) {
   let focus: Focus = { mode: "auto" };
-  let mount = "";
+  let mount: WikiMount | undefined;
+  let mountError = "";
+  let source: string | undefined;
   let lastVault: string;
   let contextNotes = new Map<string, Note>();
-  const mounted = () => mount || (mount = defaultWikiName());
-  const root = () => lastVault = resolveWiki(mounted());
-  const save = () => pi.appendEntry(ENTRY, { wiki: mounted(), vault: root(), focus });
+  const root = () => lastVault = resolveSourceVault(source || sourceVaultPath());
+  const mounted = () => {
+    if (mountError) throw new Error(mountError);
+    if (!mount) { mount = { path: checkedDirectory(defaultWikiPath(), true), name: "default" }; pi.appendEntry(MOUNT_ENTRY, { ...mount }); }
+    return mount;
+  };
+  const storage = (): WikiStorage => {
+    const directory = resolveMount(mounted());
+    let sourceVault: string | undefined;
+    try { sourceVault = root(); } catch { /* Research can use web sources without a note vault. */ }
+    return { directory, sourceVault };
+  };
+  const save = () => { const vault = root(); saveMount(); pi.appendEntry(ENTRY, { vault, focus, storageVersion: 2 }); };
+  const saveMount = () => pi.appendEntry(MOUNT_ENTRY, { ...mounted() });
   const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 
   function restore(ctx: ExtensionContext) {
-    focus = { mode: "auto" };
-    mount = "";
-    const entries = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === ENTRY);
-    if (!entries.length) return;
-    // 先還原掛載，下面比對 focus 的 vault 才有正確基準；舊 entry 沒有 wiki 欄位就留給預設值。
-    for (const entry of entries) {
-      if (entry.type === "custom" && entry.customType === ENTRY) {
-        const wiki = (entry.data as { wiki?: string })?.wiki;
-        if (wiki && knownWiki(wiki)) mount = wiki;
-      }
+    focus = { mode: "auto" }; mount = undefined; mountError = ""; source = undefined;
+    const entries = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom");
+    const lastMount = entries.filter(entry => entry.customType === MOUNT_ENTRY).at(-1);
+    const oldFocus = entries.filter(entry => entry.customType === ENTRY);
+    const previous = oldFocus.at(-1)?.data as { wiki?: string; vault?: string; focus?: Focus; storageVersion?: number } | undefined;
+    const previousSource = entries.filter(entry => [ENTRY, "pi-agent-mode-v2", "pi-research-mode-v1"].includes(entry.customType))
+      .map(entry => entry.data as { wiki?: string; vault?: string; storageVersion?: number })
+      .filter(data => typeof data?.vault === "string" && isAbsolute(data.vault)).at(-1);
+    // Existing sessions keep their original source vault and memory location.
+    if (previousSource) source = previousSource.vault;
+    if (lastMount) {
+      const value = lastMount.data as WikiMount;
+      if (!value || typeof value.path !== "string" || !isAbsolute(value.path) || value.name !== undefined && typeof value.name !== "string") throw new Error("保存的 Wiki 掛載格式無效，請重新 /wiki use。");
+      mount = { path: value.path, ...(value.name ? { name: value.name } : {}) };
+    } else if (source && previousSource?.storageVersion !== 2) {
+      const name = previous?.vault === source ? previous.wiki : previousSource?.wiki;
+      mount = { path: join(source, WIKI_DIR), ...(name && name !== "default" ? { name } : {}) };
+      // A legacy session may have selected a note before writing any Wiki.
+      if (!name) checkedDirectory(mount.path, true);
     }
-    const vault = root();
-    for (const entry of entries) {
-      if (entry.type === "custom" && entry.customType === ENTRY) {
-        const data = entry.data as { vault?: string; focus?: Focus };
-        if (data?.vault === vault && ["auto", "manual", "pending"].includes(data.focus?.mode || "")) focus = data.focus!;
-      }
-    }
+    if (previous?.vault === source && previous?.focus && ["auto", "manual", "pending"].includes(previous.focus.mode)) focus = previous.focus;
+    if (mount) { resolveMount(mount); if (!lastMount) saveMount(); }
   }
 
   function current(): ReturnType<typeof liveNote> {
@@ -69,15 +88,21 @@ export default function (pi: ExtensionAPI) {
     return liveNote(vault);
   }
 
+  const changeMount = (next: WikiMount) => {
+    records({ directory: resolveMount(next) });
+    mountError = ""; mount = next; saveMount(); contextNotes.clear(); clearEvidence();
+  };
   const mounts = {
     list: listWikis,
-    current: mounted,
-    // 換掛載等於換筆記庫，舊 focus 指的是別庫的檔案，留著會讀錯。
-    use: (name: string) => { resolveWiki(name); mount = name; focus = { mode: "auto" }; save(); },
+    current: () => mounted().path,
+    use: (name: string, cwd: string) => changeMount(mountWiki(name, cwd)),
+    reset: () => changeMount({ path: checkedDirectory(defaultWikiPath(), true), name: "default" }),
   };
-  const { markRead, markContext, clearContext, assertSources } = registerMemoryTools(pi, root, () => research.state().mode === "general" ? undefined : current().note, () => research.state().mode === "study", mounts);
-  const research = registerResearch(pi, root, assertSources);
-  registerPapers(pi, root, markRead);
+  pi.on("session_start", (...args) => onStart(...args));
+  pi.on("session_tree", (...args) => onStart(...args));
+  const { markRead, markContext, clearContext, clearEvidence, assertSources } = registerMemoryTools(pi, storage, () => research.state().mode === "general" ? undefined : current().note, () => research.state().mode === "study", mounts);
+  const research = registerResearch(pi, storage, assertSources, () => { try { return root(); } catch { return ""; } });
+  registerPapers(pi, storage, markRead);
 
   function status(ctx: ExtensionContext): ReturnType<typeof liveNote> {
     if (research.state().mode === "general") {
@@ -91,11 +116,11 @@ export default function (pi: ExtensionAPI) {
 
   const onStart = async (_event: unknown, ctx: ExtensionContext) => {
     contextNotes.clear();
-    try { restore(ctx); status(ctx); }
-    catch (err) { if (ctx.hasUI) ctx.ui.notify(`學習筆記庫尚未就緒：${(err as Error).message}`, "warning"); }
+    try { restore(ctx); }
+    catch (err) { mountError = (err as Error).message; if (ctx.hasUI) ctx.ui.notify(`Wiki 掛載尚未就緒：${mountError}`, "warning"); }
+    try { status(ctx); } catch (err) { if (ctx.hasUI) ctx.ui.notify((err as Error).message, "warning"); }
   };
-  pi.on("session_start", onStart);
-  pi.on("session_tree", onStart);
+
 
   const markSnapshot = (value: { current?: any; related?: any[] }, fresh = false) => {
     clearContext();
@@ -142,19 +167,22 @@ export default function (pi: ExtensionAPI) {
       message: { customType: "study-context", content: JSON.stringify({ mode, current: null }), display: false } };
     let context: unknown;
     try {
-      const active = status(ctx);
+      let active: ReturnType<typeof liveNote>;
+      try { active = status(ctx); }
+      catch (error) { if (mode !== "research") throw error; active = { status: "未設定來源筆記庫", note: undefined }; }
+      const availableNotes = () => { try { return listNotes(root()); } catch (error) { if (mode !== "research") throw error; return []; } };
       const query = mode === "research" ? `${research.state().topic || ""} ${research.state().question || ""} ${event.prompt}` : event.prompt;
       // An unrelated auto-follow tab must not redefine the research question.
       const note = mode === "research" && focus.mode === "auto" && active.note && !searchNotes([active.note], query, 1).length ? undefined : active.note;
-      const related = mode === "research" ? searchNotes(listNotes(root()).filter(n => n.path !== note?.path), query, 3) : note ? relatedNotes(listNotes(root()), note, query) : [];
+      const related = mode === "research" ? searchNotes(availableNotes().filter(n => n.path !== note?.path), query, 3) : note ? relatedNotes(availableNotes(), note, query) : [];
       contextNotes = new Map([...(note ? [note] : []), ...related].map(n => [n.path, n]));
-      context = { mode, research: mode === "research" ? research.context() : undefined, focus, status: active.status, vault: lastVault,
+      context = { mode, research: mode === "research" ? research.context() : undefined, focus, status: active.status, vault: lastVault, wiki: mounted().path,
         current: note ? excerpt(note, 10000, query, active.cursorLine) : null,
         currentOmittedAsUnrelated: !!active.note && !note,
         related: related.map(n => excerpt(n, 2200, query)),
-        memory: focus.mode === "pending" && mode === "study" ? [] : memoryContext(root(), mode === "research" ? query : `${note?.title || ""} ${query}`, 4, mode === "research" ? ["concept", "research"] : undefined),
+        memory: focus.mode === "pending" && mode === "study" ? [] : memoryContext(storage(), mode === "research" ? query : `${note?.title || ""} ${query}`, 4, mode === "research" ? ["concept", "research"] : undefined),
         recentUserMessages: [...userEvidence(ctx).slice(-2).map(m => ({ ...m, text: m.text.slice(0, 3000) })), { messageId: "current", text: event.prompt.slice(0, 4000) }],
-        lastSavedTabHint: active.note || focus.mode !== "auto" ? undefined : lastWorkspaceNote(root()),
+        lastSavedTabHint: active.note || focus.mode !== "auto" ? undefined : (mode === "research" && !active.note ? undefined : lastWorkspaceNote(root())),
         hintWarning: "lastSavedTabHint 只是上次儲存的分頁，不能宣稱它是現在開啟的筆記。" };
     } catch (err) { context = { error: (err as Error).message, current: null }; }
     const content = boundedContext(context);
@@ -227,19 +255,23 @@ export default function (pi: ExtensionAPI) {
     name: "study_search", label: "檢索學習筆記", description: "用中英文斷詞、術語對應與 BM25 搜尋 CPTS 原始筆記，並檢索相關 Wiki／理解紀錄；回傳來源、版本和有行號片段。",
     parameters: Type.Object({ query: Type.String({ minLength: 1 }) }),
     async execute(_id, params) {
-      const notes = searchNotes(listNotes(root()), params.query);
+      let available: Note[];
+      try { available = listNotes(root()); }
+      catch (error) { if (research.state().mode !== "research") throw error; available = []; }
+      const notes = searchNotes(available, params.query);
       const displayed = notes.map(n => excerpt(n, 2500, params.query));
       notes.forEach((n, i) => markRead(n, displayed[i].content));
-      return result({ notes: displayed, memory: memoryContext(root(), params.query, 4, research.state().mode === "study" ? undefined : ["concept", "research"]) });
+      return result({ notes: displayed, memory: memoryContext(storage(), params.query, 4, research.state().mode === "study" ? undefined : ["concept", "research"]) });
     },
   });
 
   pi.registerTool({
-    name: "study_read", label: "閱讀學習筆記", description: "讀取筆記指定行數；路徑必須是筆記庫內 Markdown。若為 Obsidian 目前頁面，優先讀編輯器內容。",
+    name: "study_read", label: "閱讀學習筆記", description: "讀取筆記指定行數；路徑必須是來源筆記庫內 Markdown；07-Agent-Wiki/ 是目前 LLM Wiki 的虛擬前綴。若為 Obsidian 目前頁面，優先讀編輯器內容。",
     parameters: Type.Object({ path: Type.String(), startLine: Type.Optional(Type.Integer({ minimum: 1 })), maxLines: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })) }),
     async execute(_id, params) {
-      const vault = root(); const disk = readNote(vault, params.path); const live = liveNote(vault);
-      const note = live.note?.path === disk.path ? live.note : disk;
+      const disk = readStoredNote(storage(), params.path);
+      const live = isWikiNote(params.path) ? undefined : liveNote(root()).note;
+      const note = live?.path === disk.path ? live : disk;
       const lines = note.text.split("\n"), start = (params.startLine || 1) - 1;
       const slice = lines.slice(start, start + (params.maxLines || 100));
       const content = slice.map((line, i) => `${start + i + 1}: ${line}`).join("\n");

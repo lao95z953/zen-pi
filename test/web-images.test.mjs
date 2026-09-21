@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

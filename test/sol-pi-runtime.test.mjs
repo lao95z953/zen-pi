@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";

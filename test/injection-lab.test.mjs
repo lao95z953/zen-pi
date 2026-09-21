@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve as presolve } from "node:path";

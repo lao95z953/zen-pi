@@ -32,7 +32,7 @@ tailscale serve --bg --yes http://127.0.0.1:4318
 
 側欄依 Workspace 顯示對話。既有 CLI Session 可唯讀檢視；按「接續對話」會建立 Web 分支，原紀錄仍保留。Side Chat、Fork 和接續分支顯示在 parent 底下，可展開、重新命名、移到回收清單及還原。刪除單筆不會刪除子對話或 Pi 的原始 Session 檔，也不會釋放磁碟空間。
 
-左右側欄與上方工具可各自收合；「專注閱讀」會收起三個區域，版面偏好保存在目前瀏覽器。串流回覆時可向上捲動閱讀，按「回到最新內容」才恢復跟隨。
+左右側欄與上方工具可各自收合；「專注閱讀」會收起三個區域，版面偏好保存在目前瀏覽器。版面固定在目前視窗內：上方版面按鈕與輸入框保持可見，長對話、對話清單及右側內容各自捲動。右側的關閉按鈕和分頁不會跟著來源清單捲走。串流回覆時可向上捲動閱讀，按「回到最新內容」才恢復跟隨。
 
 模型提供思考文字時，對話中會即時展開「思考過程」；可手動收合，歷史對話預設收合。模型若只回報推理 Token 而沒有可顯示文字，介面會提示未提供內容，不會自行生成思考文字。
 
@@ -65,6 +65,7 @@ Sub Agent 有獨立 Pi Session，可執行閱讀分析或在 Git worktree 修改
 | `PI_WEB_PI_BIN` | Pi executable，預設 PATH 中的 `pi` |
 | `PI_WEB_PUBLIC_ORIGIN` | Tailscale 的完整 HTTPS origin |
 | `PI_WEB_TAILSCALE_USER` | 允許操作的 Tailscale 登入身分 |
+| `PI_LLM_WIKI` | 預設 LLM Wiki 的絕對路徑，預設 `~/.pi/llm-wiki` |
 | `PI_STUDY_VAULT` | Obsidian vault 絕對路徑；使用 Study 時設定 |
 
 服務狀態與紀錄：

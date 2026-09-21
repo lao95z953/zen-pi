@@ -32,7 +32,10 @@ const COMMAND_USAGE = {
     { value: '/research status', label: '查看目前研究狀態' },
     { value: '/research off', label: '離開研究模式', description: '回到一般模式' },
   ] },
-  wiki: { usage: '/wiki [check|rebuild|forget <id>]', suggestions: [
+  wiki: { usage: '/wiki [list|use <路徑或名稱>|default|check|rebuild|forget <id>]', suggestions: [
+    { value: '/wiki list', label: '查看目前 Wiki 與掛載別名' },
+    { value: '/wiki use ./llm-wiki', label: '掛載目前 Workspace 的 llm-wiki', description: '只切換 Wiki，來源筆記庫不變' },
+    { value: '/wiki default', label: '回到預設 LLM Wiki' },
     { value: '/wiki check', label: '檢查知識紀錄的來源' },
     { value: '/wiki rebuild', label: '重建知識紀錄的 Markdown' },
     { value: '/wiki forget', label: '停用紀錄（填入 ID）', description: '停止檢索該筆紀錄，保留歷史' },

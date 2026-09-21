@@ -1,3 +1,4 @@
+import { readStoredNote, type WikiStorage } from "./storage.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { load } from "cheerio";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fetchPublic } from "./web.ts";
 import { saveSourceSnapshot, type PaperMetadata } from "./memory.ts";
-import { excerpt, readNote, type Note } from "./notes.ts";
+import { excerpt, type Note } from "./notes.ts";
 import { cachedPDF } from "./source-cache.ts";
 
 const run = promisify(execFile);
@@ -127,7 +128,7 @@ export async function extractPDF(bytes: Buffer, startPage: number, maxPages: num
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
 
-export async function readPDFSource(vault: string, url: string, topic: string, startPage = 1, maxPages = 5,
+export async function readPDFSource(vault: WikiStorage, url: string, topic: string, startPage = 1, maxPages = 5,
   options: Parameters<typeof cachedPDF>[2] = {}, extract = extractPDF) {
   if (!Number.isInteger(startPage) || startPage < 1 || !Number.isInteger(maxPages) || maxPages < 1 || maxPages > 10) throw new Error("一次讀 1–10 頁，startPage 從 1 開始。");
   if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(topic)) throw new Error("topic 必須是小寫英文、數字或連字號。");
@@ -135,7 +136,7 @@ export async function readPDFSource(vault: string, url: string, topic: string, s
   const body = `閱讀層級：PDF 文字片段，第 ${extracted.startPage}–${extracted.endPage} 頁／共 ${extracted.totalPages} 頁。\n${extracted.warning}\n${extracted.truncated ? "[文字超過上限已截斷；請減少 maxPages 重讀，不代表整個頁段已讀完]" : ""}\n\n${extracted.text}`;
   const { record, reused } = saveSourceSnapshot(vault, { kind: "web", topic, title: `PDF ${new URL(response.url).pathname.split("/").pop()} p${extracted.startPage}-${extracted.endPage}`, body, url: response.url,
     sourceVersion: { sha256: response.sha256, fetchedAt: response.fetchedAt, startPage: extracted.startPage, endPage: extracted.endPage, totalPages: extracted.totalPages } });
-  const note = readNote(vault, `07-Agent-Wiki/sources/${record.id}.md`), displayed = excerpt(note, 14000);
+  const note = readStoredNote(vault, `07-Agent-Wiki/sources/${record.id}.md`), displayed = excerpt(note, 14000);
   const { text: _text, ...reading } = extracted;
   return { note, data: { ...reading, url: response.url, sourceId: record.id, sourceReused: reused,
     sourceSha256: response.sha256, fetchedAt: record.sourceVersion!.fetchedAt, checkedAt: response.checkedAt,
@@ -144,7 +145,7 @@ export async function readPDFSource(vault: string, url: string, topic: string, s
     ...displayed, extractionTruncated: extracted.truncated, truncated: extracted.truncated || displayed.truncated } };
 }
 
-export function registerPapers(pi: ExtensionAPI, vault: () => string, markRead: (note: Note, displayedContent: string) => void) {
+export function registerPapers(pi: ExtensionAPI, vault: () => WikiStorage, markRead: (note: Note, displayedContent: string) => void) {
   const provider = Type.Union([Type.Literal("arxiv"), Type.Literal("crossref")]);
   pi.registerTool({ name: "research_papers", label: "搜尋研究論文", description: "用公开关键词搜尋 arXiv 預印本或 Crossref 出版 metadata。since 日期＋sort=newest 找近期候選；relevance 找相近／經典。不是完整文獻回顧或全文檢索，不要傳未公開草稿。", parameters: Type.Object({ provider, query: Type.String({ minLength: 1, maxLength: 400 }), since: Type.Optional(Type.String()), sort: Type.Optional(Type.Union([Type.Literal("relevance"), Type.Literal("newest")])) }),
     async execute(_id, p, signal) { return result(await searchPapers(p.provider, p.query, p.since, p.sort, signal)); } });
@@ -153,7 +154,7 @@ export function registerPapers(pi: ExtensionAPI, vault: () => string, markRead: 
       const paper = await getPaper(p.provider, p.id, signal), bib = bibtex(paper);
       const body = `閱讀層級：${paper.abstract ? "metadata + abstract" : "metadata only（服務未提供摘要）"}，未讀全文。\n\n作者：${paper.authors.join("；")}\n日期：${paper.published || "未提供"}\n更新：${paper.updated || "未提供"}\n類型：${paper.publicationType}\n刊物：${paper.venue || "未提供"}\nDOI：${paper.doi || "未提供"}\n\n## 摘要\n\n${paper.abstract || "未提供，不得補寫為原文摘要。"}\n\n## BibTeX（核對正式投稿格式後使用）\n\n\`\`\`bibtex\n${bib}\n\`\`\`\n`;
       const { record, reused } = saveSourceSnapshot(vault(), { kind: "web", topic: p.topic, title: paper.title, body, url: paper.url, paper });
-      const note = readNote(vault(), `07-Agent-Wiki/sources/${record.id}.md`), displayed = excerpt(note, 14000);
+      const note = readStoredNote(vault(), `07-Agent-Wiki/sources/${record.id}.md`), displayed = excerpt(note, 14000);
       markRead(note, displayed.content);
       const { abstract: _abstract, ...metadata } = paper;
       return result({ paper: metadata, sourceId: record.id, sourceReused: reused, fetchedAt: record.createdAt,
