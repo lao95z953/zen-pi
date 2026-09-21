@@ -76,6 +76,62 @@ try {
       console.log(`${name} ${width}×${height} ${reducedMotion}: toolbar, composer and independent scrolling passed`);
       await page.close();
     }
+    if (name === 'Chromium') {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, reducedMotion: 'reduce', hasTouch: true });
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      await page.goto(base); await page.locator('#messages .message').first().waitFor();
+      const devtools = await page.context().newCDPSession(page);
+      async function visible(selectors, label) {
+        await page.waitForFunction(() => {
+          const box = document.documentElement.getBoundingClientRect(), v = visualViewport;
+          return Math.abs(box.width - v.width) < 1 && Math.abs(box.height - v.height) < 1
+            && Math.abs(box.left - v.offsetLeft) < 1 && Math.abs(box.top - v.offsetTop) < 1;
+        });
+        const value = await page.evaluate(selectors => {
+          const v = visualViewport;
+          return { viewport: { width: v.width, height: v.height, left: v.offsetLeft, top: v.offsetTop, scale: v.scale },
+            boxes: Object.fromEntries(selectors.map(selector => [selector, document.querySelector(selector).getBoundingClientRect().toJSON()])) };
+        }, selectors);
+        for (const [selector, box] of Object.entries(value.boxes)) {
+          const v = value.viewport;
+          assert(box.left >= v.left - 1 && box.right <= v.left + v.width + 1 && box.top >= v.top - 1 && box.bottom <= v.top + v.height + 1,
+            `${label}: ${selector} outside visual viewport ${JSON.stringify(value)}`);
+        }
+        return value.viewport;
+      }
+      const frame = ['.reading-toolbar', '.composer-wrap', '#open-sidebar', '#toggle-header', '#toggle-right-panel'];
+      for (const scale of [1.25, 1.5, 2, 2.5, 1]) {
+        await devtools.send('Emulation.setPageScaleFactor', { pageScaleFactor: scale });
+        await visible(frame, `pinch ${scale}`);
+        await page.locator('#toggle-right-panel').click();
+        await visible(['#close-sources', '.panel-tabs'], `pinch ${scale}: sources`);
+        await page.locator('#source-pane').evaluate(node => node.scrollTop = node.scrollHeight);
+        await visible(['#close-sources'], `pinch ${scale}: sources scrolled`);
+        await page.locator('#close-sources').click();
+        await page.locator('#open-sidebar').click();
+        // The desktop sidebar may already have been open.
+        if (await page.locator('#sidebar').isHidden()) await page.locator('#open-sidebar').click();
+        await page.locator('#add-workspace').click();
+        await visible(['#workspace-dialog'], `pinch ${scale}: dialog`);
+        await page.locator('#workspace-dialog').evaluate(node => node.close());
+        await page.locator('#close-sidebar').click();
+        await page.locator('#prompt').focus();
+        await visible(frame, `pinch ${scale}: input focus`);
+        console.log(`Chromium pinch ${scale}×: controls, panels, dialog and composer passed`);
+      }
+      await devtools.send('Input.synthesizePinchGesture', { x: 640, y: 360, scaleFactor: 1.5, relativeSpeed: 800, gestureSourceType: 'mouse' });
+      await page.waitForFunction(() => visualViewport.scale > 1.1, null, { timeout: 3000 });
+      const panned = await visible(frame, 'pinch around page center');
+      assert(panned.scale > 1.1 && (panned.top > 0 || panned.left > 0), `gesture must cover panning: ${JSON.stringify(panned)}`);
+      await page.locator('#open-sidebar').click();
+      if (await page.locator('#sidebar').isHidden()) await page.locator('#open-sidebar').click();
+      await page.locator('#add-workspace').click();
+      await visible(['#workspace-dialog'], 'panned pinch: dialog');
+      await page.locator('#cancel-workspace').click();
+      console.log('Chromium centered pinch: panned visual viewport and dialog passed');
+      assert.deepEqual(errors, [], 'pinch runtime errors');
+      await page.close();
+    }
     await browser.close(); browser = null;
   }
 } finally { await browser?.close(); for (const res of streams) res.end(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
