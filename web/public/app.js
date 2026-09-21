@@ -22,7 +22,8 @@ const messageNodes = new Map();
 const collapsedSessions = new Map();
 let revealSelectedSession = true, sessionManagementTarget = null, sessionManagementPending = false;
 const LAYOUT_KEY = 'pi-web-layout-v1';
-let layoutPreferences = readLayoutPreferences(), layoutMode = innerWidth >= 768 ? 'desktop' : 'mobile';
+const viewportWidth = () => window.visualViewport?.width || innerWidth;
+let layoutPreferences = readLayoutPreferences(), layoutMode = viewportWidth() >= 768 ? 'desktop' : 'mobile';
 let mobilePanels = { left: false, right: false }, layoutRevision = 0;
 let following = true, scrollRevision = 0, lastScrollTop = 0, touchY = null;
 const traceNodes = new Map();
@@ -1171,11 +1172,32 @@ $('cancel-session-rename').onclick = () => $('session-rename-dialog').close();
 $('cancel-session-delete').onclick = () => $('session-delete-dialog').close();
 $('open-recycle').onclick = () => { $('recycle-error').hidden = true; $('recycle-status').hidden = true; renderRecycle(); $('recycle-dialog').showModal(); sessionManagementControls(); };
 $('close-recycle').onclick = () => $('recycle-dialog').close();
-addEventListener('resize', () => {
-  const nextMode = innerWidth >= 768 ? 'desktop' : 'mobile';
+// Pinch zoom and on-screen keyboards resize/pan the visual viewport without
+// changing innerWidth. Keep the frame and its responsive layout in that area.
+function syncViewport() {
+  const viewport = window.visualViewport;
+  if (viewport) {
+    const style = document.documentElement.style;
+    for (const [name, value] of Object.entries({ width: viewport.width, height: viewport.height, left: viewport.offsetLeft, top: viewport.offsetTop })) {
+      style.setProperty(`--viewport-${name}`, `${value}px`);
+    }
+  }
+  const nextMode = viewportWidth() >= 768 ? 'desktop' : 'mobile';
   if (nextMode !== layoutMode) { layoutMode = nextMode; mobilePanels = { left: false, right: false }; }
   renderLayout();
-});
+}
+addEventListener('resize', syncViewport);
+let viewportFrame = false;
+function scheduleViewport() {
+  if (viewportFrame) return;
+  viewportFrame = true;
+  requestAnimationFrame(() => { viewportFrame = false; syncViewport(); });
+}
+window.visualViewport?.addEventListener('resize', scheduleViewport);
+window.visualViewport?.addEventListener('scroll', scheduleViewport);
+window.visualViewport?.addEventListener('scrollend', scheduleViewport);
+addEventListener('pageshow', syncViewport);
+syncViewport();
 
 function usageText(usage) {
   if (!usage || usage.totalTokens == null) return 'Tokens 未提供';
