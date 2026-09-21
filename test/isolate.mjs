@@ -11,4 +11,6 @@ mkdirSync(join(root, 'notes'));
 process.env.PI_RONNY_CONFIG = config;
 process.env.PI_LLM_WIKI = join(root, 'wiki');
 process.env.PI_STUDY_VAULT = join(root, 'notes');
+process.env.PI_BROWSER_HOME = join(root, 'browser');
+delete process.env.PI_BROWSER_PYTHON;
 process.once('exit', () => rmSync(root, { recursive: true, force: true }));

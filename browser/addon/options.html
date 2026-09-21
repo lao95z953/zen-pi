@@ -1,0 +1,5 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Zen Pi Browser Bridge</title><link rel="stylesheet" href="options.css"><script type="module" src="options.js"></script></head>
+<body><main><h1>連接 Zen Pi</h1><p>在 Pi 執行 <code>/browser setup</code>，再選擇產生的 connection.json。連線後，只有你在 Pi 啟動的任務會操作指定分頁。</p>
+<label class="button">選擇連線設定<input id="config" type="file" accept=".json,application/json"></label>
+<p id="status" role="status">尚未連線</p><button id="disconnect">中斷連線</button>
+<p class="hint">配對檔含本機連線憑證，請勿分享。停止操作可在 Pi 執行 <code>/browser stop</code>。擴充套件以 DOM 操作一般網頁；瀏覽器設定頁和要求真實鍵鼠事件的網站不在目前支援範圍。</p></main></body></html>

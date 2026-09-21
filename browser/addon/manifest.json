@@ -1,0 +1,12 @@
+{
+  "manifest_version": 2,
+  "name": "Zen Pi Browser Bridge",
+  "version": "0.1.0",
+  "description": "讓 Pi 在你用 /browser 啟動任務後，操作指定的 Zen 分頁。",
+  "browser_specific_settings": { "gecko": { "id": "browser-bridge@zen-pi.local", "strict_min_version": "128.0" } },
+  "permissions": ["storage", "tabs", "http://*/*", "https://*/*"],
+  "background": { "page": "background.html" },
+  "browser_action": { "default_title": "Zen Pi Browser Bridge", "default_popup": "options.html" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "content_security_policy": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:4319"
+}

@@ -54,7 +54,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     case 'get_state': reply(request, { sessionId: id, sessionFile: file, model, thinkingLevel, isStreaming: busy, isCompacting: !!pendingCompact,
       sessionName: 'Control fixture', apiKey: secret, messageCount: messages.length }); break;
     case 'get_messages': reply(request, { messages }); break;
-    case 'get_commands': reply(request, { commands: ['mode', 'study', 'study-status', 'study-notes'].map(name => ({ name, source: 'extension', path: secret })) }); break;
+    case 'get_commands': reply(request, { commands: ['mode', 'study', 'study-status', 'study-notes', 'browser'].map(name => ({ name, source: 'extension', path: secret })) }); break;
     case 'get_available_models': reply(request, { models, headers: { Authorization: secret } }); break;
     case 'set_model': model = models.find(value => value.id === request.modelId); thinkingLevel = model.reasoning ? 'low' : 'off'; reply(request, model); break;
     case 'get_available_thinking_levels': reply(request, { levels: model.reasoning ? ['low', 'high', 'high', secret, null] : ['off'], sessionFile: secret }); break;
@@ -84,6 +84,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     case 'prompt':
       if (request.message.startsWith('/mode ')) { if (request.message !== '/mode status') mode = request.message.slice(6); custom('pi-mode-state', { mode }); reply(request); }
       else if (request.message === '/study-status') { custom('pi-study-state', { mode, focus: { mode: 'auto' }, current: null }); reply(request); }
+      else if (request.message === '/browser stop') { audit({ type: 'browser_stopped' }); reply(request); }
       else if (request.message === 'hold:queue') { busy = true; emit({ type: 'agent_start' }); reply(request); }
       else { audit({ type: 'unexpected_model_prompt', message: request.message }); reject(request, 'No model access permitted'); }
       break;
@@ -171,6 +172,7 @@ try {
   await until(async () => await count('compact') === beforeCompact + 2, 'second compact request');
   state = await call('state'); assert.equal(state.operation, 'compact'); assert.equal(state.busy, true);
   result = await call('stop', { sessionId }); assert.equal(result.ok, true); assert.equal(result.restored, '');
+  assert.equal(await count('browser_stopped'), 1, 'Web Stop also revokes the registered browser task while Pi is busy');
   assert.match((await cancelled).error, /Compaction aborted/);
   state = await call('state'); assert.equal(state.operation, null); assert.equal(state.busy, false);
   assert.equal(await count('abort'), 1, 'Stop reaches Pi while the compact HTTP request is still pending');

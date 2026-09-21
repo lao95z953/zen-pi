@@ -920,7 +920,11 @@ export async function createWebServer(options = {}) {
           for (const d of view.dialogs.values()) targetRpc.send({ type: 'extension_ui_response', id: d.id, cancelled: true }); clearDialogs();
           const queue = normalizeQueue(await targetRpc.request('clear_queue')), images = restoredImages(runtime(), queue);
           runtime().queue = { steering: [], followUp: [] }; runtime().queuedImages = { steering: [], followUp: [] };
-          await targetRpc.request('abort', {}, 45000);
+          // Revoke browser ownership even when Pi is currently generating text,
+          // where there is no browser tool AbortSignal to cancel.
+          const browserStop = runtime().runtimeCommands?.some(command => command.name === 'browser')
+            ? targetRpc.request('prompt', { message: '/browser stop' }, 30000) : Promise.resolve();
+          await Promise.all([browserStop, targetRpc.request('abort', {}, 45000)]);
           if (runtime().rpc === targetRpc && manifest.activeId === targetId) { view.busy = false; changed(); }
           json(res, { ok: true, restored: [...queue?.steering || [], ...queue?.followUp || []].join('\n\n'), restoredImages: images }); return;
         } finally { runtime().stopping = false; }
