@@ -13,6 +13,8 @@
 3. 開啟 **Zen Pi Browser Bridge** 的擴充套件選項，選擇 `connection.json`。配對檔含控制 Bridge 的憑證，不要貼進對話或分享。
 4. 回 Pi 執行 `/browser tabs`，確認分頁清單。
 
+指令輸出會顯示在 Web 對話中。Pi 在第一則模型回覆前可能尚未寫入對話檔；此時重啟 Web service 後，需重新執行指令查看設定說明或分頁清單。
+
 這是暫存附加元件，重開 Zen 後需要重新載入；配對遺失時再選一次設定檔。Flatpak 版透過網路權限連接 loopback，不需要 Native Messaging host，也不需要修改 Zen 的個人 profile 或簽章設定。
 
 附加元件為操作使用者指定的任意網站，會要求 HTTP(S) 網頁及分頁權限。它只在 Bridge 收到任務時列分頁或注入 content script，不會定時掃描頁面。配對後的連線檢查不包含頁面內容。

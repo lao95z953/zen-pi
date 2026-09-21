@@ -70,6 +70,7 @@ process.stdin.on('data', chunk => {
           const result = { role: 'toolResult', toolCallId: 'trace-call', toolName: 'bash', isError: true, content: [{ type: 'text', text: 'first line\nfixture failure' }] };
           emit({ type: 'tool_execution_end', toolCallId: 'trace-call', toolName: 'bash', isError: true, result: { content: result.content, details: { exitCode: 7, secret: 'PRIVATE-RESULT' } } });
           history.push(result); emit({ type: 'message_end', message: result });
+          custom('browser-status', { active: false });
           writeFileSync(file, JSON.stringify(history)); busy = false; emit({ type: 'agent_settled' });
         }, 200);
       }

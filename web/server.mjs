@@ -89,6 +89,11 @@ export class ConversationView {
   message(message, complete = true) {
     if (!message) return;
     if (message.role === 'custom') {
+      if (message.customType === 'browser-status' && message.display !== false) {
+        const entry = this.transcript.message(message, randomUUID());
+        this.messages.push({ id: entry.id, role: 'assistant', streaming: false, text: entry.text, timestamp: entry.timestamp, error: '' });
+        this.trimMessages(); return;
+      }
       const value = parsed(message.content);
       if (!value) return;
       if (message.customType === 'pi-mode-state' && MODES.has(value.mode)) {
