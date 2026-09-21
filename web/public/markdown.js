@@ -74,9 +74,11 @@ export function markdown(text) {
       out.push(`<blockquote>${inline(quote.join('\n')).replace(/\n/g, '<br>')}</blockquote>`); continue;
     }
     if (/^\s*(?:[-*+] |\d+\. )/.test(line)) {
-      const ordered = /^\s*\d+\. /.test(line), rows = [], re = ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/;
+      const orderedMatch = line.match(/^\s*(\d+)\.\s+/);
+      const ordered = Boolean(orderedMatch), rows = [], re = ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/;
       while (i < lines.length && re.test(lines[i])) rows.push(lines[i++].replace(re, ''));
-      out.push(`<${ordered ? 'ol' : 'ul'}>${rows.map(r => `<li>${inline(r)}</li>`).join('')}</${ordered ? 'ol' : 'ul'}>`); continue;
+      const start = ordered && orderedMatch[1] !== '1' ? ` start="${orderedMatch[1]}"` : '';
+      out.push(`<${ordered ? 'ol' : 'ul'}${start}>${rows.map(r => `<li>${inline(r)}</li>`).join('')}</${ordered ? 'ol' : 'ul'}>`); continue;
     }
     const paragraph = [line]; i++;
     while (i < lines.length && lines[i].trim() && !/^(?:#{1,4}\s|\s*```|\s*>|\s*[-*+]\s|\s*\d+\.\s|\s*(?:\\\[|\$\$))/.test(lines[i])) {

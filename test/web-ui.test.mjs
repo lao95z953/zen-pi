@@ -37,6 +37,10 @@ const code = markdown('```html\n<img src=x onerror=alert(1)>\n```\n\n**strong** 
 assert.ok(code.includes('&lt;img'));
 assert.ok(code.includes('<strong>strong</strong>'));
 assert.ok(code.includes('<table>'));
+const numbered = markdown('1. first\n\nDetails\n\n2. second\n\n3. third');
+assert.ok(numbered.includes('<ol><li>first</li></ol>'));
+assert.ok(numbered.includes('<ol start="2"><li>second</li></ol>'), 'Separated ordered-list items must retain their Markdown number');
+assert.ok(numbered.includes('<ol start="3"><li>third</li></ol>'), 'Later ordered-list items must not restart visually at 1');
 assert.equal(markdown('['.repeat(120000)), `<p>${'['.repeat(120000)}</p>`, 'Unclosed bracket runs must not create repeated link-label scans');
 assert.equal(isCurrent({ startedAt: 100, revision: 8 }, { startedAt: 100, revision: 7 }), false, 'Late HTTP response cannot undo a newer SSE snapshot');
 assert.equal(isCurrent({ startedAt: 100, revision: 8 }, { startedAt: 101, revision: 0 }), true, 'Service restart starts a new revision epoch');
