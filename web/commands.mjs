@@ -16,6 +16,12 @@ export const WEB_COMMANDS = [
 
 export const TERMINAL_COMMANDS = new Set(['settings', 'tree', 'scoped-models', 'import', 'share', 'changelog', 'hotkeys', 'trust', 'login', 'logout', 'resume', 'reload', 'quit']);
 const COMMAND_USAGE = {
+  browser: { usage: '/browser <setup|tabs|status|stop|分頁 ID 或網址 任務>', suggestions: [
+    { value: '/browser setup', label: '連接 Zen Browser' },
+    { value: '/browser tabs', label: '列出可操作的分頁' },
+    { value: '/browser status', label: '查看瀏覽器任務' },
+    { value: '/browser stop', label: '停止瀏覽器任務' },
+  ] },
   mode: { usage: '/mode <general|study|research|status>', suggestions: [
     { value: '/mode general', label: '一般模式', description: '自由討論，不自動載入筆記' },
     { value: '/mode study', label: '學習模式', description: '從筆記釐清概念與理解' },

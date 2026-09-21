@@ -41,6 +41,13 @@ assert.equal(turns.usage.currentTurn.missing, 1);
 const view = new ConversationView();
 assert.equal(view.message(usageMessage).streaming, false);
 assert.equal(view.message(usageMessage, false).streaming, true);
+const browserView = new ConversationView();
+browserView.message({ role: 'custom', customType: 'browser-status', content: 'Choose connection.json', display: true });
+assert.equal(browserView.messages[0].text, 'Choose connection.json');
+assert.equal(browserView.transcript.snapshot().entries[0].text, 'Choose connection.json');
+assert.equal(browserView.transcript.usage.requests, 0, 'Browser command output is not counted as a model call');
+browserView.message({ role: 'custom', customType: 'browser-task', content: 'INTERNAL-POLICY', display: false });
+assert(!JSON.stringify(browserView.transcript.snapshot()).includes('INTERNAL-POLICY'));
 
 const root = await mkdtemp(join(tmpdir(), 'pi-transcript-'));
 let app, base;
@@ -67,8 +74,11 @@ try {
   assert.equal(final.transcript.entries.filter(entry => entry.kind === 'tool').length, 1, 'Tool event and toolResult hydrate the same record');
   assert.equal(final.transcript.usage.requests, 1); assert.equal(final.transcript.usage.totals.reasoning, 4);
   assert.ok(!JSON.stringify(final).includes('PRIVATE-RESULT'));
+  assert.equal(JSON.parse(final.transcript.entries.find(entry => entry.model === 'Zen Pi / Browser').text).active, false);
   await app.close(); await launch();
   const restored = await api('state');
+  assert.equal(JSON.parse(restored.transcript.entries.find(entry => entry.model === 'Zen Pi / Browser').text).active, false,
+    'Persisted browser status is projected after Session reload');
   assert.equal(restored.transcript.usage.totals.totalTokens, 60, 'Usage survives process restart without a model request');
   const restoredTool = restored.transcript.entries.find(entry => entry.kind === 'tool');
   assert.match(restoredTool.input, /printf fixture/); assert.match(restoredTool.output, /fixture failure/); assert.equal(restoredTool.state, 'error');

@@ -42,6 +42,7 @@ npm run web
 - Web UI 會把對話中的 LaTeX 算式排版成 MathML，支援 `$$…$$`、`\[…\]` 與 `\(…\)`；語法有誤時保留原始 LaTeX 和 KaTeX 的錯誤說明。
 - Transcript 在主視窗顯示訊息、工具輸入輸出與錯誤。Token 數字以 Pi／模型回報為準；分支歷史累計包含重複讀取的快取，不等於上下文占用或帳單。
 - Sub Agent 在獨立 Pi Session 執行；程式任務使用 Git worktree。`read` 工具限制不是作業系統沙箱，結果需由主 Agent 或使用者檢查。詳見 [Sub Agent](docs/subagents.md)。
+- 實驗版 [Zen Browser Bridge](docs/browser.md) 可用 `/browser` 明確啟動指定分頁操作；選用本機 Laya 提供下一步建議，再由 Pi 核對執行。
 - 可選用 [NVIDIA SoL-Pi](https://github.com/NVlabs/SoL-Pi) 的 Action Fusion 與 ObservationPack；Zen Pi 不內含 SoL-Pi。整合方式見 [SoL-Pi](docs/sol-pi.md)。
 
 ## 開發

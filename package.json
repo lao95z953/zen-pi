@@ -1,6 +1,6 @@
 {
   "name": "zen-pi",
-  "version": "0.6.11",
+  "version": "0.7.0",
   "private": true,
   "description": "Zen Pi：一般、學習與研究模式，來源記憶與 Workspace Web UI",
   "keywords": [
@@ -8,7 +8,8 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/study/index.ts"
+      "./extensions/study/index.ts",
+      "./extensions/browser/index.mjs"
     ],
     "skills": [],
     "prompts": []
@@ -25,7 +26,9 @@
     "web": "node web/server.mjs",
     "web:install": "node scripts/install-web-service.mjs",
     "build:web": "node scripts/build-vendor.mjs",
-    "test:web-layout": "node test/browser/layout.mjs"
+    "test:web-layout": "node test/browser/layout.mjs",
+    "test:browser-addon": "node test/browser/zen-addon.mjs",
+    "browser:model": "node scripts/setup-browser-model.mjs"
   },
   "dependencies": {
     "cheerio": "1.2.0",

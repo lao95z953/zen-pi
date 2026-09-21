@@ -44,6 +44,12 @@ export class Transcript {
     return entry;
   }
   message(message, id, complete = true) {
+    if (message.role === 'custom' && message.customType === 'browser-status' && message.display !== false) {
+      // Extension output is visible, but is not a model request and has no token usage.
+      return this.put(id, { kind: 'assistant', messageId: id, text: bounded(contentText(message.content)),
+        timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(), state: 'done',
+        model: 'Zen Pi / Browser', thinking: '', error: '', usage: null });
+    }
     if (message.role === 'bashExecution') return this.put(id, { kind: 'tool', name: 'bash', input: bounded(message.command), output: bounded(message.output) + (message.truncated ? '\n[Pi 已截斷輸出]' : ''), state: message.cancelled ? 'aborted' : message.exitCode ? 'error' : 'done', exitCode: Number.isInteger(message.exitCode) ? message.exitCode : undefined });
     if (message.role === 'toolResult') {
       return this.tool({ type: 'tool_execution_end', toolCallId: message.toolCallId, toolName: message.toolName, result: { content: message.content, details: message.details }, isError: message.isError });

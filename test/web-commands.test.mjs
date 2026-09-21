@@ -46,7 +46,7 @@ function assertCommandList(commands) {
     assert.ok(typeof item.name === 'string' && item.name);
     assert.ok(Object.keys(item).every(key => ['name', 'description', 'source', 'usage', 'suggestions'].includes(key)), 'Command lists expose only their public fields');
   }
-  for (const name of ['model', 'help', 'new', 'name', 'session', 'mode', 'study']) assert.ok(commands.some(item => item.name === name), `Command list includes /${name}`);
+  for (const name of ['model', 'help', 'new', 'name', 'session', 'mode', 'study', 'browser']) assert.ok(commands.some(item => item.name === name), `Command list includes /${name}`);
 }
 function assertModels(result, sessionId) {
   assert.equal(result.ok, true); assert.equal(result.state.sessionId, sessionId);
@@ -174,6 +174,13 @@ try {
   await call('model', { sessionId, provider: 'mock-a', modelId: 'alpha' }, 409);
   assert.equal(modelCalls, 0, 'All real-Pi command and draft operations use zero model requests');
   assert.equal(await readFile(join(vault, 'Synthetic.md'), 'utf8'), '# Synthetic\nOnly a temporary test note.\n');
+  const browserSession = state.sessionId;
+  await command(browserSession, '/browser status');
+  state = await call('state');
+  const browserStatus = state.transcript.entries.find(entry => entry.model === 'Zen Pi / Browser');
+  assert.equal(JSON.parse(browserStatus.text).active, false, 'Browser status is visible in the Web conversation');
+  assert.equal(state.transcript.usage.requests, 0);
+  assert.equal(modelCalls, 0);
   await close();
   console.log('Real Pi Web commands: model selection, help, Session info/name/new, extension dispatch and draft persistence pass with 0 model requests');
 
@@ -195,7 +202,7 @@ let model = models[0], mode = 'general';
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const reply = (request, data) => emit({ type: 'response', id: request.id, command: request.type, success: true, data });
 const custom = (customType, value) => emit({ type: 'message_end', message: { role: 'custom', customType, content: JSON.stringify(value) } });
-const commands = ['mode', 'study', 'study-status', 'study-notes', 'fixture-extension'].map(name => ({ name, description: 'Fixture extension', source: 'extension' }));
+const commands = ['mode', 'study', 'study-status', 'study-notes', 'browser', 'fixture-extension'].map(name => ({ name, description: 'Fixture extension', source: 'extension' }));
 commands.push({ name: 'fixture-template', description: 'Fixture template', source: 'prompt' }, { name: 'skill:fixture-skill', description: 'Fixture skill', source: 'skill' });
 for (const command of commands) Object.assign(command, { path: '/PRIVATE_COMMAND_SOURCE_SENTINEL', sourceInfo: { path: '/PRIVATE_COMMAND_SOURCE_SENTINEL', origin: 'temporary' } });
 for await (const line of createInterface({ input: process.stdin })) {

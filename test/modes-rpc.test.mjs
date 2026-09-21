@@ -17,7 +17,7 @@ writeFileSync(join(agent, "models.json"), JSON.stringify({ providers: { mock: { 
 
 try {
   await test("真實 Pi RPC：模式和筆記清單可用 custom message 讀取，全程不呼叫模型", async () => {
-    const commands = ["/mode status", "/study-notes NAT", "/study NAT.md", "/study-status", "/mode research", "/research off", "/mode invalid"];
+    const commands = ["/mode status", "/study-notes NAT", "/study NAT.md", "/study-status", "/mode research", "/research off", "/mode invalid", "/browser status", "/browser stop"];
     const events = [];
     await new Promise((resolveRun, reject) => {
       const child = spawn("pi", ["--mode", "rpc", "--no-session", "--no-context-files", "--no-skills"], { cwd: vault, env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_STUDY_VAULT: vault }, stdio: ["pipe", "pipe", "pipe"] });
@@ -50,6 +50,9 @@ try {
     assert(list.notes.some(n => n.path === "NAT.md") && !JSON.stringify(list).includes("私有筆記內容"));
     assert(payloads("pi-study-state").at(-1).current.path === "NAT.md");
     assert(payloads("pi-mode-error").at(-1).error.includes("用法"));
+    const browser = messages.filter(m => m.customType === 'browser-status');
+    assert(JSON.parse(browser[0].content).active === false, 'Browser extension loads from the package and starts inactive');
+    assert(browser[1].content.includes('已停止'));
     assert(modelCalls === 0, `${modelCalls} unintended model calls`);
   });
 } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(temp, { recursive: true, force: true }); }

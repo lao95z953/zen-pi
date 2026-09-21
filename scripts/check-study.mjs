@@ -9,6 +9,9 @@ const pi = join(globalRoot, "@earendil-works/pi-coding-agent");
 const req = createRequire(join(pi, "package.json"));
 const paths = { "@earendil-works/pi-coding-agent": [join(pi, "dist/index.d.ts")], "typebox": [req.resolve("typebox").replace(/\.mjs$/, ".d.mts")] };
 const files = ["extensions/study", "extensions/subagents"].flatMap(dir => readdirSync(dir).filter(f => f.endsWith(".ts")).map(f => resolve(dir, f)));
+for (const dir of ['browser', 'browser/addon', 'extensions/browser']) {
+  for (const name of readdirSync(dir).filter(name => /\.(m?js)$/.test(name))) execFileSync(process.execPath, ['--check', join(dir, name)], { stdio: 'inherit' });
+}
 const temp = mkdtempSync(join(tmpdir(), "pi-study-types-"));
 try {
   const config = join(temp, "tsconfig.json");
