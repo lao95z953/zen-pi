@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { createRequire } from "node:module";
 import { mkdtempSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,10 +1,11 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeLoader, makeApi, makeCtx, fire, test, assert, assertIncludes, report } from "./harness.mjs";
 
 const temp = mkdtempSync(join(tmpdir(), "pi-mode-evidence-")), vault = join(temp, "vault");
-mkdirSync(vault); process.env.PI_STUDY_VAULT = vault;
+mkdirSync(vault); process.env.PI_STUDY_VAULT = vault; process.env.PI_LLM_WIKI = join(vault, "07-Agent-Wiki");
 const j = await makeLoader();
 const { default: factory, boundedContext } = await j.import(resolve("extensions/study/index.ts"));
 const { createReadEvidence } = await j.import(resolve("extensions/study/provenance.ts"));
@@ -32,7 +33,7 @@ try {
       assert(!result.systemPrompt.includes("你需要主動維護 Wiki"));
       assert(custom(a, "pi-mode-state").every(m => m.mode === "general"));
       assert(!custom(a, "pi-mode-error").length && !a.api._sent.some(m => m.kind === "user"));
-    } finally { process.env.PI_STUDY_VAULT = vault; }
+    } finally { process.env.PI_STUDY_VAULT = vault; process.env.PI_LLM_WIKI = join(vault, "07-Agent-Wiki"); }
   });
   await test("明確選擇三種模式、off、自然語言與無 UI 狀態", async () => {
     write("NAT.md", "# NAT\nNAT 保存轉譯對應。\n");

@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -14,7 +15,7 @@ writeFileSync(join(vault, "02-指令庫", "SMB-Enumeration.md"), "# SMB Enumerat
 writeFileSync(join(vault, "03-概念", "NAT&Reverse-Shell.md"), "# NAT 與 Reverse Shell\n連線方向\n");
 writeFileSync(join(vault, "secret.ovpn"), "should not load");
 writeFileSync(join(vault, ".obsidian", "private.md"), "should not load");
-process.env.PI_STUDY_VAULT = vault;
+process.env.PI_STUDY_VAULT = vault; process.env.PI_LLM_WIKI = join(vault, "07-Agent-Wiki");
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = await makeLoader();
 const n = await jiti.import(join(project, "extensions/study/notes.ts"));

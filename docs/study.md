@@ -26,37 +26,44 @@ Bridge 在本機 `~/.pi/agent/obsidian/<vault-hash>.json` 存放目前頁面和�
 
 使用 Study 前設定 `PI_STUDY_VAULT=/absolute/path/to/vault`，並在該 vault 啟用 Bridge。
 
-## 掛載多個筆記庫
+## 掛載 LLM Wiki
 
-一個對話同時只掛一個筆記庫，但可以先登記多個，再按對話切換。在 `~/.pi/agent/ronny.json` 填入：
+LLM Wiki 與原始筆記庫分開。新對話預設使用 `~/.pi/llm-wiki`，原始筆記仍由 `PI_STUDY_VAULT` 決定。研究模式可以只用網路來源，不必先建立 Obsidian vault。
+
+```text
+/wiki use ./llm-wiki
+/wiki use ~/research/llm-wiki
+/wiki use /absolute/path/to/llm-wiki
+/wiki default
+```
+
+相對路徑以目前 Pi 的工作目錄為準，Web 則以目前 Workspace 為準。指定目錄不存在時會建立。`/wiki default` 回到 `~/.pi/llm-wiki`；可用 `PI_LLM_WIKI=/absolute/path` 覆寫預設位置。
+
+掛載只影響目前對話的記憶與來源快照，不改變原始筆記庫，也不重設指定筆記或 Obsidian 跟隨。Session 保存絕對路徑，重開或 Fork 後不會因 cwd 改變而轉向別處。掛載目錄消失、變成 symlink，或使用的別名被刪除／改路徑時，記憶操作會停止並要求重新選擇，不退回預設位置。切換掛載也會清除先前的已讀引用授權，保存前須重新讀取來源。
+
+常用位置可在 `~/.pi/agent/ronny.json` 登記，修改後不用重新啟動：
 
 ```json
 {
-  "wikis": { "cpts": "~/vaults/CPTS-Prepare", "lab": "~/vaults/Loop-Prompti-Lab" },
-  "defaultWiki": "cpts"
+  "llmWikis": { "research": "~/research/llm-wiki", "project": "/path/to/project/llm-wiki" }
 }
 ```
 
-`/wiki list` 列出登記的掛載點，箭頭標示目前這個對話掛在哪，路徑不存在的會標出來；`/wiki use <名稱>` 切換。
-切換只影響當前對話，狀態存在 session 裡，重開對話會還原，同時開兩個對話可以各掛各的。
-`defaultWiki` 是新對話的起點，留空就用清單第一個。
+`/wiki list` 顯示目前位置與別名；`/wiki use research` 掛載對應目錄。`default` 是保留名稱。
 
-沒有登記 `wikis` 時，`PI_STUDY_VAULT` 會以 `default` 這個名字成為唯一掛載點，行為跟以前一樣；
-設定檔裡同名的項目會蓋掉它。相對路徑會被忽略，否則解析結果會跟著工作目錄跑。
-
-掛載決定的是同一個筆記庫的讀與寫：研究模式搜尋的原始筆記、`07-Agent-Wiki/` 的讀寫都跟著它走。
-切換後 Obsidian 的跟隨會重設為 auto，因為原本指定的筆記屬於另一個庫。Bridge 是逐個 vault 啟用的，
-切到沒裝 Bridge 的筆記庫就沒有跟隨功能，研究模式不受影響。
+舊設定的 `wikis` 仍指向 Obsidian vault，其別名現在明確對應該 vault 的 `07-Agent-Wiki` 子目錄。舊 Session 會保留原先筆記庫與 Wiki 位置；不自動搬移已有內容。`defaultWiki` 只作未設定 `PI_STUDY_VAULT` 時的舊版來源筆記庫相容設定，不再決定新對話的 LLM Wiki。要從舊對話改用新預設位置，執行 `/wiki default`。
 
 ## 知識與理解分開保存
 
-筆記庫的 `07-Agent-Wiki/` 包含：
+目前掛載的 LLM Wiki 目錄直接包含：
 
 - `concepts/`：概念頁，需要已讀來源的版本、行號、原文引文。
 - `learning/`：你實際回答的證據、提問情境、模型判斷理由與下一題。
 - `sources/`：實際抓取的公開網頁文字快照。
 - `.records/`：不可變 JSON 歷史，每次更新新增版本。
 - `index.md` 和 `schema.md`：索引與使用規則。
+
+工具中的 `07-Agent-Wiki/` 是指向目前掛載 Wiki 的虛擬前綴，供 `study_read` 讀取來源快照；保存收據提供實際檔案路徑。新紀錄的筆記引用會保存原本來源 vault，避免不同筆記庫的同名檔案混淆。
 
 原始筆記不由記憶工具修改。Wiki 的 Markdown 是生成視圖，重建會覆寫；自己的補充請寫在原始筆記，再請 Agent 更新概念頁。
 
@@ -74,8 +81,9 @@ URL、DNS 與重新導向都檢查公開位址，不會藉這個工具連內網�
 
 ## 維護
 
-- `/wiki list`：列出可掛載的筆記庫，並標示目前這個對話掛在哪。
-- `/wiki use <名稱>`：把目前對話切到另一個筆記庫。
+- `/wiki list`：列出 Wiki 別名與目前掛載路徑。
+- `/wiki use <路徑或名稱>`：切換目前對話的 LLM Wiki；來源筆記庫不變。
+- `/wiki default`：回到預設 LLM Wiki。
 - `/wiki` 或 `/wiki check`：來源變更／消失、版本衝突、超過 30 天的學習觀察。
 - `/wiki rebuild`：由 JSON 紀錄重建 Markdown 視圖。
 - `/wiki forget <id>`：新增撤回紀錄，停止檢索，歷史仍保留；不是隱私資料的徹底刪除。

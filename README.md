@@ -36,7 +36,7 @@ npm run web
 - Workspace 依對話工作目錄分組，列出 Web 與本機 Pi Session。Side Chat 和 Fork 顯示在父 Session 底下，可重新命名、移到回收清單與還原。
 - 輸入框可貼上圖片，或從電腦、手機選檔；提供縮圖、放大與移除。支援 PNG、JPEG、WebP、GIF，每則最多 4 張、每張 5 MiB、合計 8 MiB。圖片可隨生成中的補充訊息送出，未交付的附件可恢復至原 Session 草稿。模型需支援圖片輸入。
 - Study 根據目前筆記與已展示的來源整理 Wiki 和理解紀錄；Research 保存查證進度。來源引用記錄版本與片段，模型的推論仍需檢查。
-- 可在 `~/.pi/agent/ronny.json` 登記多個筆記庫，用 `/wiki list` 查看、`/wiki use <名稱>` 逐對話切換；讀取與寫入都跟著掛載走。
+- LLM Wiki 預設位於 `~/.pi/llm-wiki`。用 `/wiki use ./llm-wiki` 依目前 Workspace 掛載其他位置，`/wiki default` 回預設；來源筆記庫保持不變。也可在 `ronny.json` 的 `llmWikis` 登記別名。
 - 模型提供思考文字時，主對話會在生成中即時顯示可收合的「思考過程」，並在重新開啟 Session 後保留。模型未提供可顯示的文字時，介面不會根據推理 Token 猜測內容。
 - Web UI 會把對話中的 `mermaid` 程式碼區塊顯示成圖表，並提供縮放與原始碼複製；圖表語法錯誤時仍可閱讀原始碼。
 - Web UI 會把對話中的 LaTeX 算式排版成 MathML，支援 `$$…$$`、`\[…\]` 與 `\(…\)`；語法有誤時保留原始 LaTeX 和 KaTeX 的錯誤說明。

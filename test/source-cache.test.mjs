@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

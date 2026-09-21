@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -51,7 +52,7 @@ writeFileSync(join(agent,"settings.json"),JSON.stringify({packages:[resolve(".")
 writeFileSync(join(agent,"models.json"),JSON.stringify({providers:{mock:{baseUrl:`http://127.0.0.1:${port}/v1`,api:"openai-completions",apiKey:"test-placeholder",compat:{supportsDeveloperRole:false,supportsReasoningEffort:false},models:[{id:"study-mock",reasoning:false,input:["text"],contextWindow:64000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]}}}));
 
 function runPi(message,kickoff="/study NAT"){return new Promise((resolveRun,reject)=>{
-  const child=spawn("pi",["--mode","rpc","--no-session","--no-context-files","--no-skills"],{cwd:vault,env:{...process.env,PI_CODING_AGENT_DIR:agent,PI_STUDY_VAULT:vault},stdio:["pipe","pipe","pipe"]});
+  const child=spawn("pi",["--mode","rpc","--no-session","--no-context-files","--no-skills"],{cwd:vault,env:{...process.env,PI_CODING_AGENT_DIR:agent,PI_STUDY_VAULT:vault,PI_LLM_WIKI:join(vault,"07-Agent-Wiki")},stdio:["pipe","pipe","pipe"]});
   let buffer="",stderr="",finished=false;
   const timer=setTimeout(()=>{child.kill("SIGKILL");reject(new Error("Pi mock provider timed out: "+stderr.slice(0,800)));},25000);
   child.stderr.on("data",chunk=>stderr+=chunk);

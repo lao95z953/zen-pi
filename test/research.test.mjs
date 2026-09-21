@@ -1,10 +1,11 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeLoader, makeApi, makeCtx, fire, test, assert, assertIncludes, report } from "./harness.mjs";
 
 const temp = mkdtempSync(join(tmpdir(), "pi-research-")), vault = join(temp, "vault");
-mkdirSync(vault); process.env.PI_STUDY_VAULT = vault;
+mkdirSync(vault); process.env.PI_STUDY_VAULT = vault; process.env.PI_LLM_WIKI = join(vault, "07-Agent-Wiki");
 const original = "# SMB signing\nSMB signing provides message integrity.\nIt does not encrypt message contents.\n";
 writeFileSync(join(vault, "SMB.md"), original);
 const j = await makeLoader();
@@ -91,14 +92,14 @@ try {
     const { api, ctx } = boot(); await enter(api, ctx);
     const draft = { ...args, topic: "initial-plan", status: "draft", findings: [{ claim: "可能需要區分版本。", type: "hypothesis", sourceIndices: [] }], sources: [] };
     const result = JSON.parse((await exec(api, ctx, "research_save", draft)).content[0].text);
-    const page = readFileSync(join(vault, result.path), "utf8");
+    const page = readFileSync(result.path, "utf8");
     assertIncludes(page, "待驗證假說"); assertIncludes(page, "尚無來源");
   });
   await test("研究與同名概念獨立版本，生成來源、未知和下一步，原始筆記不變", async () => {
     m.saveRecord(vault, { kind: "concept", topic: args.topic, title: "SMB signing", body: "概念", sources: [citation] });
     const { api, ctx } = boot(); await enter(api, ctx); await exec(api, ctx, "study_read", { path: "SMB.md" });
     const saved = JSON.parse((await exec(api, ctx, "research_save", args)).content[0].text);
-    const page = readFileSync(join(vault, saved.path), "utf8");
+    const page = readFileSync(saved.path, "utf8");
     for (const word of ["研究問題", "範圍", "來源陳述", "來源 1", "## 來源", "下一步", "未查證", "synthesis"]) assertIncludes(page, word);
     assert(readFileSync(join(vault, "SMB.md"), "utf8") === original);
     assert(m.visibleRecords(m.records(vault)).filter(x => x.topic === args.topic).length === 2);

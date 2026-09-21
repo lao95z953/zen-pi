@@ -1,10 +1,11 @@
+import './isolate.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makeLoader, makeApi, makeCtx, test, assert, assertIncludes, report } from "./harness.mjs";
 
 const temp = mkdtempSync(join(tmpdir(), "pi-memory-retrieval-")), vault = join(temp, "vault");
-mkdirSync(vault); process.env.PI_STUDY_VAULT = vault;
+mkdirSync(vault); process.env.PI_STUDY_VAULT = vault; process.env.PI_LLM_WIKI = join(vault, "07-Agent-Wiki");
 const j = await makeLoader(), m = await j.import(resolve("extensions/study/memory.ts")), n = await j.import(resolve("extensions/study/notes.ts"));
 const { default: factory } = await j.import(resolve("extensions/study/index.ts"));
 let serial = 0;

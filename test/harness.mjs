@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";

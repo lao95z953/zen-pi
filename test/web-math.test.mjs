@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import assert from 'node:assert/strict';
 import { markdown } from '../web/public/markdown.js';
 import { createMathRenderer } from '../web/public/math-view.js';

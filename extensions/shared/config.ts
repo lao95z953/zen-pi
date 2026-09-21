@@ -21,10 +21,12 @@ export interface RonnyConfig {
   rules: Record<string, boolean>;
   /** 額外的「這是實驗、該去 ws 跑」判斷式,字串會當 RegExp source 編譯。 */
   extraExperimentPatterns: string[];
-  /** 可掛載的 LLM Wiki:短名 → vault 絕對路徑,可用 ~/ 開頭。 */
+  /** 舊版別名 → vault 絕對路徑；Wiki 位於其 07-Agent-Wiki。 */
   wikis: Record<string, string>;
-  /** 新對話預設掛載哪個短名。留空就用清單第一個。 */
+  /** 未設定 PI_STUDY_VAULT 時使用的舊版來源筆記庫別名。 */
   defaultWiki: string;
+  /** LLM Wiki 別名 → Wiki 目錄，不是 Obsidian vault。 */
+  llmWikis: Record<string, string>;
 }
 
 const DEFAULTS: RonnyConfig = {
@@ -37,12 +39,13 @@ const DEFAULTS: RonnyConfig = {
   extraExperimentPatterns: [],
   wikis: {},
   defaultWiki: "",
+  llmWikis: {},
 };
 
 let cached: RonnyConfig | undefined;
 
-export function loadConfig(): RonnyConfig {
-  if (cached) return cached;
+export function loadConfig(refresh = false): RonnyConfig {
+  if (cached && !refresh) return cached;
   let overrides: Partial<RonnyConfig> = {};
   // PI_RONNY_CONFIG 可以指到別的設定檔,測試和臨時實驗用。
   const path = process.env.PI_RONNY_CONFIG || join(homedir(), ".pi", "agent", "ronny.json");
@@ -57,6 +60,7 @@ export function loadConfig(): RonnyConfig {
     ...overrides,
     rules: { ...DEFAULTS.rules, ...(overrides.rules ?? {}) },
     wikis: { ...DEFAULTS.wikis, ...(overrides.wikis ?? {}) },
+    llmWikis: { ...DEFAULTS.llmWikis, ...(overrides.llmWikis ?? {}) },
   };
   return cached;
 }

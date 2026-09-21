@@ -1,6 +1,7 @@
+import { readStoredNote, receiptPath, storageDirectory, isWikiNote, type WikiStorage } from "./storage.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { excerpt, readNote, type Note } from "./notes.ts";
+import { excerpt, type Note } from "./notes.ts";
 import { WIKI_DIR, lintWiki, records, renderWiki, saveRecord, saveSourceSnapshot, sourceStatus, verifyCitations, visibleRecords, type Citation, type MemoryRecord } from "./memory.ts";
 import { createReadEvidence } from "./provenance.ts";
 import type { WikiMounts } from "./wikis.ts";
@@ -9,9 +10,9 @@ import { extractPage, fetchPublic, searchWeb } from "./web.ts";
 export const citationSchema = Type.Object({ path: Type.String(), sha256: Type.String(), startLine: Type.Integer({ minimum: 1 }), endLine: Type.Integer({ minimum: 1 }), quote: Type.String({ minLength: 1, maxLength: 2000 }) });
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: {} });
 // The tool call already contains the text; return a receipt and keep full recall explicit.
-const saveReceipt = (record: MemoryRecord) => ({ id: record.id, kind: record.kind, topic: record.topic, title: record.title,
+const saveReceipt = (vault: WikiStorage, record: MemoryRecord) => ({ id: record.id, kind: record.kind, topic: record.topic, title: record.title,
   createdAt: record.createdAt, status: record.status, supersedes: record.supersedes,
-  path: `${WIKI_DIR}/${record.kind === "concept" ? `concepts/${record.topic}` : `learning/${record.id}`}.md` });
+  path: receiptPath(vault, `${record.kind === "concept" ? `concepts/${record.topic}` : `learning/${record.id}`}.md`) });
 
 /** 掛載是 extension 主體注入的，單獨測試 registerMemoryTools 時會是 undefined。 */
 const requireMounts = (mounts?: WikiMounts) => {
@@ -30,13 +31,13 @@ export function userEvidence(ctx: ExtensionContext) {
   return texts.slice(-6);
 }
 
-export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, current: () => Note | undefined, allowObservation = () => true, mounts?: WikiMounts) {
+export function registerMemoryTools(pi: ExtensionAPI, vault: () => WikiStorage, current: () => Note | undefined, allowObservation = () => true, mounts?: WikiMounts) {
   const evidence = createReadEvidence();
   pi.on("session_start", async () => { evidence.clear(); });
   pi.on("session_tree", async () => { evidence.clear(); });
   const { markRead, markContext, clearContext } = evidence;
   const actualNote = (path: string) => {
-    const disk = readNote(vault(), path); const live = current();
+    const disk = readStoredNote(vault(), path); const live = isWikiNote(path) ? undefined : current();
     return live?.path === disk.path ? live : disk;
   };
   const assertSources = (sources: Citation[]) => {
@@ -52,7 +53,7 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
     parameters: Type.Object({ topic: Type.String(), title: Type.String(), body: Type.String({ minLength: 1, maxLength: 20000 }), supersedes: Type.Optional(Type.String()), sources: Type.Array(citationSchema, { minItems: 1, maxItems: 8 }) }),
     async execute(_id, params) {
       assertSources(params.sources);
-      return result(saveReceipt(saveRecord(vault(), { kind: "concept", topic: params.topic, title: params.title, body: params.body, supersedes: params.supersedes, sources: params.sources, status: "source-derived" })));
+      return result(saveReceipt(vault(), saveRecord(vault(), { kind: "concept", topic: params.topic, title: params.title, body: params.body, supersedes: params.supersedes, sources: params.sources, status: "source-derived" })));
     },
   });
 
@@ -65,7 +66,7 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
       const messages = userEvidence(ctx);
       const source = params.messageId === "current" ? messages.at(-1) : messages.find(m => m.messageId === params.messageId);
       if (!source || !source.text.includes(params.evidence)) throw new Error("證據必須逐字出現在指定的近期使用者回答，不接受模型或文件內容。");
-      return result(saveReceipt(saveRecord(vault(), { kind: "learning", topic: params.topic, title: params.title, body: params.reasoning, question: params.question, evidence: params.evidence,
+      return result(saveReceipt(vault(), saveRecord(vault(), { kind: "learning", topic: params.topic, title: params.title, body: params.reasoning, question: params.question, evidence: params.evidence,
         messageId: source.messageId, sessionId: ctx.sessionManager.getSessionId(), status: params.status, nextQuestion: params.nextQuestion })));
     },
   });
@@ -100,14 +101,14 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
       const sourceTruncated = page.truncated || page.text.length > 19000;
       const { record, reused } = saveSourceSnapshot(vault(), { kind: "web", topic: params.topic, title: page.title, url: response.url,
         body: `${sourceTruncated ? "[來源正文超過上限，僅保存前 19000 字元]\n\n" : ""}${page.text.slice(0, 19000)}` });
-      const path = `${WIKI_DIR}/sources/${record.id}.md`, note = readNote(vault(), path);
+      const path = `${WIKI_DIR}/sources/${record.id}.md`, note = readStoredNote(vault(), path);
       const displayed = excerpt(note, 14000); markRead(note, displayed.content);
       return result({ url: response.url, fetchedAt: record.createdAt, checkedAt: new Date().toISOString(), reused, sourceId: record.id, extraction: "HTML text; no JavaScript", sourceTruncated, ...displayed });
     },
   });
 
   pi.registerCommand("wiki", {
-    description: "查看知識與學習紀錄：/wiki；/wiki list 列出可掛載的 Wiki；/wiki use <名稱> 切換掛載；/wiki check 檢查來源；/wiki rebuild 重建 Markdown；/wiki forget <id> 停用一筆紀錄（歷史保留）",
+    description: "查看知識與學習紀錄：/wiki；/wiki default 回預設位置；/wiki list 列出可掛載的 Wiki；/wiki use <路徑或名稱> 切換掛載；/wiki check 檢查來源；/wiki rebuild 重建 Markdown；/wiki forget <id> 停用一筆紀錄（歷史保留）",
     handler: async (args, ctx) => {
       try {
         const arg = args.trim();
@@ -115,16 +116,16 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
         if (arg === "list") {
           const wikis = requireMounts(mounts);
           const all = wikis.list(), now = wikis.current();
-          const lines = all.map(w => `${w.name === now ? "→" : " "} ${w.name}${w.ready ? "" : "（路徑不存在）"}  ${w.path}`);
+          const lines = all.map(w => `${w.path === now ? "→" : " "} ${w.name}${w.ready ? "" : "（路徑不存在）"}  ${w.path}`);
           if (ctx.hasUI) ctx.ui.notify(all.length
-            ? `可掛載的 Wiki：\n${lines.join("\n")}`
-            : "沒有可掛載的 Wiki：設定 PI_STUDY_VAULT，或在 ~/.pi/agent/ronny.json 的 wikis 填入 vault 路徑。", "info");
+            ? `目前掛載：${now}\n可掛載的 Wiki：\n${lines.join("\n")}`
+            : "沒有可掛載的 Wiki：請用 /wiki default 或 /wiki use ./llm-wiki。", "info");
           return;
         }
-        if (arg.startsWith("use ")) {
+        if (arg === "default" || arg.startsWith("use ")) {
           const wikis = requireMounts(mounts);
           if (!ctx.isIdle()) throw new Error("請等本輪完成或先停止，再切換 Wiki。");
-          wikis.use(arg.slice(4).trim());
+          if (arg === "default") wikis.reset(); else wikis.use(arg.slice(4).trim(), ctx.cwd);
           switched = `已掛載 ${wikis.current()}\n`;
         }
         else if (arg === "rebuild") renderWiki(vault());
@@ -132,11 +133,11 @@ export function registerMemoryTools(pi: ExtensionAPI, vault: () => string, curre
           const target = records(vault()).find(r => r.id === arg.slice(7).trim() && r.kind !== "retraction");
           if (!target) throw new Error("找不到該紀錄 ID。");
           saveRecord(vault(), { kind: "retraction", topic: target.topic, title: `停用 ${target.title}`, body: "使用者要求停止檢索此紀錄；原始歷史保留。", target: target.id });
-        } else if (arg && arg !== "check") throw new Error("用法：/wiki [list|use <名稱>|check|rebuild|forget <id>]");
+        } else if (arg && arg !== "check") throw new Error("用法：/wiki [list|default|use <路徑或名稱>|check|rebuild|forget <id>]");
         const health = lintWiki(vault());
-        if (ctx.hasUI) ctx.ui.notify(`${switched}Wiki ${health.records} 筆紀錄，${health.issues.length} 項待複查\n${health.issues.slice(0, 8).map(i => `${i.topic}: ${i.issue}`).join("\n")}\n${WIKI_DIR}/index.md`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`${switched}Wiki ${health.records} 筆紀錄，${health.issues.length} 項待複查\n${health.issues.slice(0, 8).map(i => `${i.topic}: ${i.issue}`).join("\n")}\n${storageDirectory(vault())}/index.md`, "info");
       } catch (err) { if (ctx.hasUI) ctx.ui.notify((err as Error).message, "error"); }
     },
   });
-  return { markRead, markContext, clearContext, assertSources };
+  return { markRead, markContext, clearContext, clearEvidence: () => evidence.clear(), assertSources };
 }

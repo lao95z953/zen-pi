@@ -1,3 +1,4 @@
+import './isolate.mjs';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
