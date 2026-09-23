@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import sys
+from pathlib import Path
 
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_FLAX", "0")
@@ -16,13 +17,26 @@ def load_agent(download=False):
     from huggingface_hub import snapshot_download
 
     torch.set_num_threads(min(4, os.cpu_count() or 1))
-    directory = snapshot_download(
-        REPO, revision=REVISION, local_files_only=not download,
-        allow_patterns=["model.safetensors", "rl_agent_config.json", "encoder/*", "tokenizer/*"],
-    )
-    agent = laya.load(directory, device="cpu")
+    custom = os.environ.get("PI_BROWSER_LAYA_MODEL_DIR")
+    if custom:
+        directory = Path(custom).expanduser().resolve(strict=True)
+        if not directory.is_dir() or not all((directory / name).exists() for name in ("model.safetensors", "rl_agent_config.json", "encoder", "tokenizer")):
+            raise ValueError("PI_BROWSER_LAYA_MODEL_DIR is not a complete local Laya checkpoint")
+    else:
+        directory = snapshot_download(
+            REPO, revision=REVISION, local_files_only=not download,
+            allow_patterns=["model.safetensors", "rl_agent_config.json", "encoder/*", "tokenizer/*"],
+        )
+    device = os.environ.get("PI_BROWSER_LAYA_DEVICE", "cpu")
+    if device not in ("cpu", "cuda"):
+        raise ValueError("PI_BROWSER_LAYA_DEVICE must be cpu or cuda")
+    agent = laya.load(str(directory), device=device)
+    agent.model_name = directory.name if custom else "laya-multilingual"
     agent.cfg["max_len"] = 1024
-    agent.cfg["head_max_len"] = 512
+    trained_head = int(agent.cfg.get("head_max_len_train", 512)) if custom else 512
+    if not 256 <= trained_head <= 768:
+        raise ValueError("Unsupported Laya checkpoint head budget")
+    agent.cfg["head_max_len"] = trained_head
     return agent
 
 
@@ -40,16 +54,20 @@ def predict(agent, request):
         lengths = [len(agent.tok(" " + value, add_special_tokens=False)["input_ids"]) for value in options]
         head = len(agent.tok(f"choice question: {q['ins']}", add_special_tokens=False)["input_ids"])
         body = len(agent.tok(json.dumps(state, ensure_ascii=False), add_special_tokens=False)["input_ids"])
-        if max(lengths) > 48 or head + sum(lengths) + len(options) > 512 or head + sum(lengths) + len(options) + body + 4 > 1024:
+        head_budget = agent.cfg["head_max_len"]
+        if max(lengths) > 48 or head + sum(lengths) + len(options) > head_budget or head + sum(lengths) + len(options) + body + 4 > agent.cfg["max_len"]:
             raise ValueError("Laya context budget exceeded; ask Pi to shorten the step goal or page context")
-    return agent.predict(state, questions)
+    result = agent.predict(state, questions)
+    result["model"] = agent.model_name
+    return result
 
 
 def main():
     with contextlib.redirect_stdout(sys.stderr):
         agent = load_agent(download="--download" in sys.argv)
     if "--download" in sys.argv:
-        print(json.dumps({"ready": True, "model": REPO, "revision": REVISION}))
+        print(json.dumps({"ready": True, "model": agent.model_name,
+                          "revision": None if os.environ.get("PI_BROWSER_LAYA_MODEL_DIR") else REVISION}))
         return
     for line in sys.stdin:
         request = {}

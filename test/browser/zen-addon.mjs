@@ -18,7 +18,9 @@ const port = portServer.address().port; await new Promise(r => portServer.close(
 const uuid = '83d025a0-588f-44b8-ac20-601386e59156';
 const config = { endpoint: 'http://127.0.0.1:4319', token: 'b'.repeat(48) };
 const bridge = await createBrowserBridge({ token: config.token });
-const site = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(`<!doctype html><title>Bridge fixture</title><style>body{font:18px sans-serif;padding:24px}input,button,select{padding:10px;margin:10px}</style><h1>Test page</h1><label>Search <input id="query"></label><button id="go">Search</button><p id="result">Ready</p><label>Category <select id="category"><option>All</option><option>Research</option></select></label><label>Password <input type="password" value="secret-fixture"></label><button disabled>Disabled</button><script>document.querySelector('#go').onclick=()=>{document.querySelector('#result').textContent='Result: '+document.querySelector('#query').value;window.clicks=(window.clicks||0)+1}</script>`); });
+const site = createServer((req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(req.url === '/overflow'
+  ? `<!doctype html><title>Many links</title><style>a{display:inline-block;width:65px;height:20px;font:10px sans-serif}input{display:block}</style>${Array.from({ length: 90 }, (_, i) => `<a href="#link-${i}">Link ${i}</a>`).join('')}<label>Search <input id="query"></label>`
+  : `<!doctype html><title>Bridge fixture</title><style>body{font:18px sans-serif;padding:24px}input,button,select{padding:10px;margin:10px}</style><h1>Test page</h1><label>Search <input id="query"></label><button id="go">Search</button><p id="result">Ready</p><label>Category <select id="category"><option>All</option><option>Research</option></select></label><label>Password <input type="password" value="secret-fixture"></label><button disabled>Disabled</button><script>document.querySelector('#go').onclick=()=>{document.querySelector('#result').textContent='Result: '+document.querySelector('#query').value;window.clicks=(window.clicks||0)+1}</script>`); });
 await new Promise(r => site.listen(0, '127.0.0.1', r));
 let child, socket, lease, log = '', serial = 0, buffer = Buffer.alloc(0);
 const pending = new Map();
@@ -91,6 +93,9 @@ try {
   await script('const e=document.createElement("div"); e.id="overlay"; e.style="position:fixed;inset:0;z-index:100;background:#fff8"; document.body.append(e); return true');
   await assert.rejects(call({ op: 'act', snapshot: page.snapshot, action: button.id }), /遮住/);
   lease = null;
+  const overflow = await request(config, { op: 'begin', url: `http://127.0.0.1:${site.address().port}/overflow` }); lease = overflow.lease;
+  assert(overflow.page.truncated, 'The page must exercise the 80-action cap');
+  assert(overflow.page.actions.some(a => a.kind === 'fill' && a.label === 'Search'), 'The search field must remain available after many links');
   console.log(`Real headless ${process.env.PI_BROWSER_FLATPAK === '1' ? 'Zen Flatpak' : 'Firefox'} addon: package install, file pairing, authenticated bridge, tab binding, isolated content scripts, fill/click/select, sensitive fields and stale/covered target rejection passed. No personal profile or model used.`);
 } catch (error) { console.error(log); throw error; }
 finally {
