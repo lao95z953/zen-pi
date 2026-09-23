@@ -105,10 +105,10 @@ test('Queue normalization preserves exact drafts, order and intentional duplicat
 
 test('Web controls are listed, and terminal names appear only when Pi registers them', () => {
   const names = WEB_COMMANDS.map(command => command.name);
-  for (const name of ['thinking', 'compact', 'fork', 'clone', 'export', 'copy', 'agents', 'side']) {
+  for (const name of ['thinking', 'compact', 'fork', 'clone', 'export', 'copy', 'agents', 'side', 'reload']) {
     assert.ok(names.includes(name)); assert.equal(TERMINAL_COMMANDS.has(name), false);
   }
-  for (const name of ['login', 'logout', 'settings', 'resume', 'reload', 'tree']) {
+  for (const name of ['login', 'logout', 'settings', 'resume', 'tree']) {
     assert.equal(TERMINAL_COMMANDS.has(name), true);
     assert.equal(commandCatalog([]).some(command => command.name === name), false, 'A terminal command is not invented by the Web catalog');
     assert.equal(safeCommands([{ name, source: 'extension' }])[0].name, name, 'An actual Pi registration can use the same name');

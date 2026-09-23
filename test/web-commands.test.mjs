@@ -56,7 +56,7 @@ function assertCommandList(commands) {
     assert.ok(typeof item.name === 'string' && item.name);
     assert.ok(Object.keys(item).every(key => ['name', 'description', 'source', 'usage', 'suggestions', 'argumentHint'].includes(key)), 'Command lists expose only their public fields');
   }
-  for (const name of ['model', 'help', 'new', 'name', 'session', 'mode', 'study', 'browser']) assert.ok(commands.some(item => item.name === name), `Command list includes /${name}`);
+  for (const name of ['model', 'help', 'new', 'reload', 'name', 'session', 'mode', 'study', 'browser']) assert.ok(commands.some(item => item.name === name), `Command list includes /${name}`);
 }
 function assertModels(result, sessionId) {
   assert.equal(result.ok, true); assert.equal(result.state.sessionId, sessionId);
@@ -106,12 +106,12 @@ try {
   assert.equal(response.command.info.messageCount, 0);
   assert.ok(JSON.stringify(response.command.info.workspace).includes(vault));
   assert.ok(response.command.info.model); assert.ok(response.command.info.title);
-  for (const message of ['/login', '/settings', '/reload', '/unknown-command', '/skill:missing-skill']) {
+  for (const message of ['/login', '/settings', '/unknown-command', '/skill:missing-skill']) {
     const rejected = await command(sessionId, message, 400);
     assert.ok(rejected.error, `${message} returns an explicit error rather than becoming a model prompt`);
   }
   for (const message of ['/study-status', '/study-notes']) await command(sessionId, message, 400);
-  for (const message of ['/help extra', '/session extra', '/clone extra', '/export extra', '/copy extra', '/agents extra', '/new extra']) {
+  for (const message of ['/help extra', '/session extra', '/reload extra', '/clone extra', '/export extra', '/copy extra', '/agents extra', '/new extra']) {
     assert.match((await command(sessionId, message, 400)).error, /參數|不需要參數/, `${message} must reject ignored arguments`);
   }
   assert.equal((await command(sessionId, '/compact')).command.type, 'compact', 'Compaction first opens a reviewable confirmation without calling a model');
@@ -155,6 +155,13 @@ try {
   assert.equal(response.ok, true);
   state = await call('state'); assert.equal(state.sessions.find(session => session.id === sessionId).title, '手機上的測試對話');
   response = await command(sessionId, '/session'); assert.equal(response.command.info.title, '手機上的測試對話');
+  response = await command(sessionId, '/reload');
+  assert.equal(response.state.sessionId, sessionId, 'Reload keeps the current Web Session');
+  assert.equal(response.state.mode, 'study', 'Reload restores the active extension mode');
+  assert.match(response.state.notice, /重新載入/);
+  assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'mock-b', id: 'beta' }, 'Reload keeps the draft model');
+  assert.equal((await command(sessionId, '/session')).command.info.title, '手機上的測試對話', 'Reload keeps the Session name');
+  assert.equal(modelCalls, 0, 'Reload never sends a model request');
 
   const savedDraftState = JSON.parse(await readFile(join(dataDir, 'sessions.json'), 'utf8')).sessions.find(session => session.id === sessionId).draftState;
   assert.equal(savedDraftState.mode, 'study');
@@ -173,8 +180,12 @@ try {
     savedDraftState, 'A failed restore must retain the original model, Mode, name and focus in the manifest');
   await command(sessionId, 'This must not reach the default model after a failed restore.', 503);
   assert.equal(modelCalls, 0);
-  await close();
   await writeFile(join(agent, 'models.json'), availableModelConfig);
+  response = await command(sessionId, '/reload');
+  assert.equal(response.state.online, true, 'Reload can recover an offline Pi process after its configuration is repaired');
+  assert.equal(response.state.mode, 'study');
+  assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'mock-b', id: 'beta' });
+  await close();
   await launch();
   state = await call('state');
   assert.equal(state.sessionId, sessionId); assert.equal(state.online, true); assert.equal(state.error, '');
@@ -281,7 +292,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'sentinel-b', id: 'shared' });
   await command(sessionId, '/model unique');
   assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'sentinel-b', id: 'unique' });
-  for (const message of ['/login', '/reload', '/made-up-command', '/skill:not-installed']) await command(sessionId, message, 400);
+  response = await command(sessionId, '/reload');
+  assert.equal(response.state.sessionId, sessionId);
+  assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'sentinel-b', id: 'unique' }, 'Reload restores the selected model in a new RPC process');
+  for (const message of ['/login', '/made-up-command', '/skill:not-installed']) await command(sessionId, message, 400);
   for (const message of ['/fixture-extension', '/settings', '/fixture-template', '/skill:fixture-skill']) await command(sessionId, message);
   assert.match((await command(sessionId, '/fixture-extension throw', 400)).error, /Synthetic command failure/);
   for (const message of ['/mode\tstudy', '/mode\nresearch']) await command(sessionId, message);
