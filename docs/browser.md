@@ -36,7 +36,7 @@ Pi 可使用 `browser` 工具的以下操作：
 | 操作 | 行為 |
 | --- | --- |
 | `observe` | 讀取指定分頁，取得一次性的 `snapshot` 與可用 action ID。 |
-| `step` | 讓本機 Laya 建議下一步；不會點擊或填字。可用 `goal` 提供最多 400 字的單步目標。 |
+| `step` | 讓 Laya 建議下一步；不會點擊或填字。可用 `goal` 提供最多 400 字的單步目標。 |
 | `act` | 由 Pi 核對後，指定最新的 `snapshot`、action ID 和必要的 `text` 執行一次。 |
 | `finish` | `completed` 必須核對指定文字或完整 URL；`blocked` 則停止。文字吻合不代表整個任務必然完成，Pi 仍需核對目標。 |
 
@@ -56,6 +56,10 @@ npm run browser:model
 
 2026-09-21 在 Workstation，以 CPU 執行 `eval/browser-laya.mjs` 的 10 個合成案例：英文選對 2/5，繁體中文選對 1/5，合計 3/10。填字、選單和連結案例常被誤判成已完成；最初單一搜尋案例也曾出現高信心的錯誤完成判斷。這些結果只適用於目前的觀察格式、提示與候選分組，不能推論其他 checkpoint 或任務的表現。
 
+搜尋流程的本機微調資料與重現步驟見 [Laya 搜尋決策實驗](../eval/laya-search.md)。如需試用已驗證的本機 checkpoint，設定 `PI_BROWSER_LAYA_MODEL_DIR` 為含 `model.safetensors`、`rl_agent_config.json`、`encoder/`、`tokenizer/` 的完整目錄。未設定時仍使用上述固定 revision 的 Laya Multilingual。`PI_BROWSER_LAYA_DEVICE` 預設 `cpu`，Workstation 評估時可設 `cuda`。這些選項只影響 Laya 的建議，不會讓建議自動執行。
+
+若 checkpoint 留在 Workstation，可讓 Bridge 透過 SSH 啟動那台機器上的 Laya worker。Pi process 需設定 `PI_BROWSER_LAYA_SSH_HOST`（已可免互動登入的 SSH 別名或主機）、`PI_BROWSER_LAYA_SSH_ROOT`（遠端含 `browser/laya/worker.py` 和 `.venv/bin/python` 的絕對目錄）、`PI_BROWSER_LAYA_MODEL_DIR`（遠端 checkpoint 的絕對目錄）與 `PI_BROWSER_LAYA_DEVICE=cuda`。傳往 Workstation 的內容是目前頁面的決策狀態與候選動作；SSH 斷線時 `step` 會失敗，Pi 仍可用 `observe/act`。使用 Web service 時，這些環境變數可寫在 `~/.config/zen-pi-web/environment`，再重啟服務生效。不要把主機路徑或個人設定提交到 repository。
+
 因此第一版保留 Pi 核對每個建議。`confidence` 是輸出分布的集中程度，不是完成任務的成功率。後續應先用固定案例比較提示／模型與 Pi 直接操作的品質，再決定是否值得自動連續執行；目前沒有加速或節省 Token 的實測結論。
 
 ## 資料流與限制
@@ -68,9 +72,9 @@ npm run browser:model
 
 設計參考 [Jev Ultrafast](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46) 的「觀察、列候選、選動作、重讀驗證」。Ultrafast 上游的 Chrome CDP 執行器與 Jev 決策 API 沒有直接接入本版；Zen 使用另外實作的 Gecko WebExtension。參考來源見 [NOTICE](../browser/NOTICE.md)。
 
-Bridge 不把頁面內容另存日誌，但 Pi 的工具結果會進入目前 Session，也可能送往使用者選定的 Pi 模型 provider。Laya 本身的推論留在本機。網頁文字視為不可信資料，不得改變原本任務與授權。
+Bridge 不把頁面內容另存日誌，但 Pi 的工具結果會進入目前 Session，也可能送往使用者選定的 Pi 模型 provider。Laya 推論在 Pi 主機；設定 SSH 模式時則在指定的 Workstation。網頁文字視為不可信資料，不得改變原本任務與授權。
 
-每次觀察最多回傳 80 個操作、2000 字可見文字；單一選單最多列出 24 個選項，超出會標示 `truncated`。Laya 的候選選項分組比較，保留每個已觀察候選參與比較；超過 Token 預算會回報錯誤，不默默裁掉選項。
+每次觀察最多回傳 80 個操作、2000 字可見文字；單一選單最多列出 24 個選項，超出會標示 `truncated`。可輸入欄位、選單和按鈕會先於連結列入候選，避免頁面上大量連結擠掉搜尋欄。Laya 的候選選項分組比較，保留每個已觀察候選參與比較；超過 Token 預算會回報錯誤，不默默裁掉選項。
 
 以下功能尚不支援：瀏覽器網址列和設定頁、跨 frame 操作、Shadow DOM 內部控制項、Canvas 介面、拖曳、檔案上傳／下載及要求真實鍵鼠事件的網站。密碼、付款卡與 OTP 輸入欄位會排除，但這不等於完整的個資去識別化。頁面改變、目標被遮住或操作回應遺失時停止，不會自動重送點擊；遇到導頁造成的回應遺失，也需要檢查實際分頁再重新啟動。
 

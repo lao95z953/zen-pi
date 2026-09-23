@@ -36,8 +36,11 @@
   function observe() {
     const id = crypto.randomUUID(), nodes = new Map(), actions = [];
     const selectors = 'a[href],button,input,textarea,select,[role=button],[role=link],[role=checkbox],[role=radio],[role=combobox],[contenteditable=true]';
+    const editable = 'textarea,input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),[contenteditable=true]';
+    const priority = e => e.matches(editable) ? 0 : e.tagName === 'SELECT' ? 1 : e.matches('button,input[type=button],input[type=submit],[role=button]') ? 2 : 3;
+    const candidates = [...document.querySelectorAll(selectors)].sort((a, b) => priority(a) - priority(b));
     let clipped = false;
-    for (const e of document.querySelectorAll(selectors)) {
+    for (const e of candidates) {
       if (!visible(e) || sensitive(e) || e.disabled || e.readOnly || e.getAttribute('aria-disabled') === 'true' || e.matches('input[type=hidden]')) continue;
       const info = describe(e); if (!info.label) continue;
       if (actions.length >= 80) { clipped = true; break; }
@@ -49,7 +52,7 @@
         for (const option of options.slice(0, remaining)) {
           actions.push({ id: `${ref}:select:${option.index}`, ref, kind: 'select', ...info, label: `${info.label} → ${clean(option.text)}`, option: option.index });
         }
-      } else if (e.matches('textarea,input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),[contenteditable=true]')) {
+      } else if (e.matches(editable)) {
         actions.push({ id: `${ref}:fill`, ref, kind: 'fill', ...info });
       } else actions.push({ id: `${ref}:click`, ref, kind: 'click', ...info });
     }
