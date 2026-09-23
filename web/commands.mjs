@@ -2,6 +2,7 @@ export const WEB_COMMANDS = [
   { name: 'model', description: '選擇目前對話使用的模型', source: 'web', usage: '/model [provider/model 或 model ID]' },
   { name: 'help', description: '查看 Web 可用的指令', source: 'web' },
   { name: 'new', description: '在目前 Workspace 開始新對話', source: 'web' },
+  { name: 'reload', description: '重新載入目前 Web 對話的 Pi 擴充套件與設定', source: 'web' },
   { name: 'name', description: '設定目前對話名稱', source: 'web', usage: '/name <新名稱>', argumentHint: '接著輸入新名稱' },
   { name: 'session', description: '查看目前對話資訊', source: 'web' },
   { name: 'thinking', description: '選擇目前模型支援的推理程度', source: 'web', usage: '/thinking [程度]' },
@@ -14,7 +15,7 @@ export const WEB_COMMANDS = [
   { name: 'side', description: '開啟 Side Chat；問題會填入草稿，需再送出', source: 'web', usage: '/side [問題]' },
 ];
 
-export const TERMINAL_COMMANDS = new Set(['settings', 'tree', 'scoped-models', 'import', 'share', 'changelog', 'hotkeys', 'trust', 'login', 'logout', 'resume', 'reload', 'quit']);
+export const TERMINAL_COMMANDS = new Set(['settings', 'tree', 'scoped-models', 'import', 'share', 'changelog', 'hotkeys', 'trust', 'login', 'logout', 'resume', 'quit']);
 const INTERNAL_COMMANDS = new Set(['study-status', 'study-notes']);
 const COMMAND_USAGE = {
   browser: { usage: '/browser <setup|tabs|status|stop|分頁 ID 或網址 任務>', suggestions: [

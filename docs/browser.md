@@ -6,7 +6,7 @@
 
 ## 第一次連接
 
-先安裝這個 Pi package，再重新開啟 Pi；已開啟的終端 Pi 可用 `/reload`。Web UI 的 Pi process 需重新載入 package，通常重啟 Web service 後生效。
+先安裝這個 Pi package，再重新開啟 Pi；已開啟的終端 Pi 可用 `/reload`。Web UI 中已開啟的對話也可用 `/reload` 重啟該對話的 Pi process 並載入新版 package；若更新 Web server 程式碼或服務環境變數，仍須重啟 Web service。
 
 1. 在 Pi 執行 `/browser setup`。這會啟動 `127.0.0.1:4319` 的本機 Bridge，產生 `~/.pi/browser/connection.json`，並打包 `~/.pi/browser/zen-pi-browser-bridge.xpi`。打包需要 Python 3。
 2. 在 Zen 開啟 `about:debugging#/runtime/this-firefox`，按「載入暫存附加元件」，選擇剛產生的 `.xpi`。

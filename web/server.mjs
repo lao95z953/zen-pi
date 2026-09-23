@@ -776,10 +776,10 @@ export async function createWebServer(options = {}) {
     if (contexts.run(selectedRuntime(), catalogViewKey) !== before) { await persist(); contexts.run(selectedRuntime(), changed); }
     return snapshot();
   }
-  const requireActive = body => {
+  const requireActive = (body, allowOffline = false) => {
     if (!body.sessionId || body.sessionId !== manifest.activeId || runtime().id !== body.sessionId) throw fail(409, '目前對話已在另一個頁面切換，請重新載入。');
     if (active()?.origin === 'local' && (!runtime().bridge || runtime().bridge.closed)) throw fail(409, '這是本機對話紀錄；請先按「接續對話」。');
-    if ((!runtime().rpc || runtime().rpc.closed) && (!runtime().bridge || runtime().bridge.closed)) throw fail(503, 'Pi 已離線，請重新開啟對話。');
+    if (!allowOffline && (!runtime().rpc || runtime().rpc.closed) && (!runtime().bridge || runtime().bridge.closed)) throw fail(503, 'Pi 已離線，請重新開啟對話。');
   };
   async function promptImages(ids) {
     const owner = runtime(), rpc = owner.rpc, epoch = owner.epoch;
@@ -973,7 +973,7 @@ export async function createWebServer(options = {}) {
   }
   async function webCommand(command) {
     const { name, args } = command;
-    if (args && ['help', 'session', 'clone', 'export', 'copy', 'agents'].includes(name)) throw fail(400, `/${name} 不接受參數。`);
+    if (args && ['help', 'session', 'reload', 'clone', 'export', 'copy', 'agents'].includes(name)) throw fail(400, `/${name} 不接受參數。`);
     if (name === 'model') {
       const menu = await modelMenu();
       if (!args) return { ok: true, state: snapshot(), command: menu };
@@ -985,6 +985,17 @@ export async function createWebServer(options = {}) {
     if (name === 'new') {
       if (args) throw fail(400, '/new 不需要參數；會在目前 Workspace 建立對話。');
       return { ok: true, state: await newSession(manifest.workspaceId) };
+    }
+    if (name === 'reload') {
+      const record = active(), owner = runtime();
+      if (record?.origin !== 'web' || owner.bridge) throw fail(409, '原生 Pi 對話請在終端執行 /reload。');
+      if (subagentAdmissions.get(record.id) || subagents?.hasActiveParent(record.id))
+        throw fail(409, '這個對話還有 Sub Agent 執行中，請先完成或取消。');
+      if (owner.rpc && !owner.rpc.closed) await rememberSession();
+      owner.generation++; await stopOwnedRpc(owner); owner.rpc = undefined;
+      await start(active());
+      view.notice = '已重新載入目前對話的 Pi 擴充套件與設定。'; changed();
+      return { ok: true, state: snapshot() };
     }
     if (name === 'name') {
       if (!validTitle(args)) throw fail(400, '對話名稱需為 1–160 字元的單行文字，不能包含控制字元。');
@@ -1202,7 +1213,7 @@ export async function createWebServer(options = {}) {
             await persist(); changed(); throw e;
           }
         }
-        requireActive(body);
+        requireActive(body, url.pathname === '/api/prompt' && requestedCommand?.name === 'reload');
         if (runtime().bridge && url.pathname !== '/api/prompt') throw fail(409, '這段對話由原生 Pi 終端管理；目前可從 Web 傳送一般訊息。');
         if (url.pathname === '/api/side-chat') return sideChat(body.message);
         if (url.pathname === '/api/thinking') return thinkingMenu(body.level);
