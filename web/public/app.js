@@ -41,6 +41,15 @@ function renderNotice() {
   $('notice-text').textContent = state.notice || '';
   $('notice').hidden = !key || dismissedNotice === key;
 }
+function renderCliSyncHint() {
+  $('cli-sync-hint').textContent = state.nativeBridge
+    ? '這段對話由原生 Pi 終端執行；Web 已接入相同的 Session。'
+    : state.readOnly
+    ? '目前開啟的是原生 Pi 紀錄。請先按「接續對話」建立可共用的 Web 對話。'
+    : state.sessionId && !state.online
+      ? '目前 Pi 已離線。重新開啟這段對話後，終端才能接入。'
+      : '終端使用 Web 服務中的同一個 Pi 程序；原生 pi 指令直接開啟同一檔案不會同步。';
+}
 async function api(path, body) {
   if (body !== undefined) body = { sessionId: state.sessionId, workspaceId: state.workspaceId, ...body };
   const response = await fetch(`/api/${path}`, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-Pi-Web': '1' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -60,7 +69,7 @@ function controls() {
   document.querySelectorAll('.session-item').forEach(button => { button.disabled = !can.browse; });
   document.querySelectorAll('.session-more').forEach(button => { button.disabled = !connected || sessionManagementPending; });
   const tooLong = $('prompt').value.length > 32000;
-  $('send').disabled = !can.send || promptPending.has(draftScope(state)) || (!$('prompt').value.trim() && !draftImages().length) || uploadingImages() || imageLimitExceeded() || tooLong;
+  $('send').disabled = !can.send || promptPending.has(draftScope(state)) || (!$('prompt').value.trim() && !draftImages().length) || uploadingImages() || imageLimitExceeded() || tooLong || !!state.nativeBridge && !!draftImages().length;
   $('draft-limit').hidden = !tooLong;
   $('send').hidden = state.busy || !!current.operation; $('stop').hidden = !state.busy && !current.operation; $('stop').disabled = !connected || stopPending;
   $('new-session').disabled = !can.start;
@@ -69,14 +78,14 @@ function controls() {
   $('choose-model').disabled = !!modelReason; $('choose-model').title = modelReason || '選擇模型（/model）';
   for (const id of ['model-action-hint', 'model-dialog-hint']) { $(id).textContent = modelReason; $(id).hidden = !modelReason; }
   document.querySelectorAll('#model-results button').forEach(button => { button.disabled = !!modelReason; });
-  $('prompt').disabled = !can.input; $('add-image').disabled = !can.input;
+  $('prompt').disabled = !can.input; $('add-image').disabled = !can.input || !!state.nativeBridge;
   $('open-commands').disabled = !(state.commands || []).length;
   $('workspace-select').disabled = !can.browse || !(state.workspaces || []).length;
   $('add-workspace').disabled = !can.browse; $('save-workspace').disabled = !can.browse;
   $('refresh-sessions').disabled = !can.browse;
   $('continue-session').disabled = !can.continue;
   $('choose-thinking').disabled = !!modelReason;
-  $('open-tools').disabled = !connected || !state.sessionId;
+  $('open-tools').disabled = !connected || !state.sessionId || !!state.nativeBridge;
   $('start-side-chat').disabled = !agents.side;
   $('return-parent').disabled = !can.browse || !sessionParent(state);
   for (const name of ['stats', 'export', 'copy']) $(`tool-${name}`).disabled = !agents.inspect;
@@ -95,8 +104,8 @@ function controls() {
   $('agent-create-hint').textContent = state.readOnly ? '接續對話後，才能建立新的 Sub Agent。' : !state.sessionId ? '先開一段主對話，再分派任務。' : !state.online ? 'Pi 連線恢復後可建立任務。' : '';
   document.querySelectorAll('.job-cancel').forEach(button => { button.disabled = !agents.cancelAgent; });
   document.querySelectorAll('.job-use').forEach(button => { button.disabled = state.readOnly || !state.sessionId; });
-  $('composer-hint').textContent = state.busy ? 'Enter 排到下一輪；從補充選單可立即調整方向。Shift + Enter 換行。' : state.readOnly ? '本機紀錄 · 請先接續對話' : 'Enter 送出 · Shift + Enter 換行 · 輸入 / 查看指令';
-  $('connection-label').textContent = !connected ? '正在重新連線' : state.readOnly ? '本機紀錄 · 唯讀' : state.online ? 'Pi 已連線' : state.sessionId ? 'Pi 已離線' : '已就緒';
+  $('composer-hint').textContent = state.busy ? 'Enter 排到下一輪；從補充選單可立即調整方向。Shift + Enter 換行。' : state.readOnly ? '本機紀錄 · 請先接續對話' : state.nativeBridge ? '原生 Pi 即時同步 · 輸入一般訊息' : 'Enter 送出 · Shift + Enter 換行 · 輸入 / 查看指令';
+  $('connection-label').textContent = !connected ? '正在重新連線' : state.nativeBridge ? '原生 Pi 即時同步' : state.readOnly ? '本機紀錄 · 唯讀' : state.online ? 'Pi 已連線' : state.sessionId ? 'Pi 已離線' : '已就緒';
   $('connection-dot').classList.toggle('online', connected && (state.online || !state.sessionId || state.readOnly));
   sessionManagementControls();
 }
@@ -358,7 +367,7 @@ function apply(next) {
   $('session-title').textContent = state.sessions.find(s => s.id === state.sessionId)?.title || '新對話';
   $('compact-session-title').textContent = $('session-title').textContent;
   $('compact-session-title').title = $('session-title').textContent;
-  $('mode-caption').textContent = `${state.readOnly ? '本機紀錄 · ' : ''}${(state.mode || 'general').toUpperCase()}`;
+  $('mode-caption').textContent = `${state.nativeBridge ? '本機同步 · ' : state.readOnly ? '本機紀錄 · ' : ''}${(state.mode || 'general').toUpperCase()}`;
   $('model-label').textContent = state.model || (state.readOnly ? '閱讀紀錄時不會啟動模型' : '使用目前 Pi 模型設定');
   $('model-button-label').textContent = state.model || '目前設定';
   $('thinking-label').textContent = thinkingLabels[state.thinkingLevel] || state.thinkingLevel || '目前設定';
@@ -366,12 +375,13 @@ function apply(next) {
   $('parent-navigation').hidden = !parentId;
   $('parent-caption').textContent = session?.kind === 'side' || state.sideChat ? 'Side Chat · 獨立對話' : '分支對話';
   $('composer-hint').textContent = state.readOnly ? '本機紀錄 · 請先接續對話' : hints[state.mode];
-  $('prompt').placeholder = state.readOnly ? '先接續對話，才能繼續傳送訊息。' : '輸入訊息，或 / 查看指令…';
+  $('prompt').placeholder = state.readOnly ? '先接續對話，才能繼續傳送訊息。' : state.nativeBridge ? '傳送一般訊息給原生 Pi 終端…' : '輸入訊息，或 / 查看指令…';
   $('composer').classList.toggle('readonly', !!state.readOnly);
   $('choose-note').hidden = state.mode !== 'study';
   const current = state.context?.current;
   $('note-label').textContent = current ? current.split('/').at(-1).replace(/\.md$/, '') : '選擇筆記';
   renderNotice();
+  renderCliSyncHint();
   setError(state.error);
   renderWorkspaces(); renderSessions(); renderRecycle(); renderReadOnly(); renderConversation(); renderSources(); renderActivity(); renderTranscript(); renderQuestion(); renderCommands(); renderQueue(); renderJobs(); controls();
   if ($('help-dialog').open) {
@@ -760,6 +770,17 @@ $('close-error').onclick = () => {
   dismissedError = $('error-text').textContent; $('error').hidden = true;
 };
 $('close-session-info').onclick = () => $('session-dialog').close();
+$('open-cli-sync').onclick = () => { renderCliSyncHint(); $('cli-sync-status').hidden = true; $('cli-sync-dialog').showModal(); };
+$('close-cli-sync').onclick = () => $('cli-sync-dialog').close();
+$('copy-cli-sync').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('cli-sync-command').textContent);
+    $('cli-sync-status').textContent = '已複製指令。';
+  } catch {
+    $('cli-sync-status').textContent = '無法自動複製；請選取上方指令。';
+  }
+  $('cli-sync-status').hidden = false;
+};
 $('open-sidebar').onclick = () => drawer('sidebar', !visibleLayout().left);
 $('toggle-right-panel').onclick = () => drawer('sources-panel', !visibleLayout().right);
 $('toggle-header').onclick = toggleHeader;
@@ -1296,7 +1317,7 @@ function renderTranscript() {
   $('transcript-usage').textContent = `輸出：${metric(totals.output)} tokens${totals.reasoning == null ? '' : `（含推理 ${metric(totals.reasoning)}）`}\n非快取輸入：${metric(totals.input)}\n快取讀取：${metric(totals.cacheRead)} · 寫入：${metric(totals.cacheWrite)}\n最近送出訊息後，已回報 ${turn.reported || 0} / ${turn.requests || 0} 次模型回應。${state.busy ? '生成中的回應尚未結算。' : ''}`;
   $('transcript-history').textContent = `目前分支共 ${usage.requests || 0} 次模型回應，${usage.missing || 0} 次未提供用量。\n非快取輸入 ${metric(usage.totals?.input)} · 輸出 ${metric(usage.totals?.output)}\n快取讀取 ${metric(usage.totals?.cacheRead)} · 快取寫入 ${metric(usage.totals?.cacheWrite)}\n各次請求合計（包含反覆讀取快取）：${metric(usage.totals?.totalTokens)} tokens。\n不是單次上下文大小，也不是訂閱額度或實際帳單。${usage.cost == null ? '' : `\nPi 的 API 價目估算：US$ ${usage.cost.toFixed(6)}；不代表本帳號實際收費。`}\n最近一次模型回應：${usageText(usage.latest)}`;
   $('transcript-limit').textContent = `${trace.omitted ? `已省略較早的 ${trace.omitted} 筆執行紀錄。` : ''}長輸入／輸出保留頭尾，完整內容仍在原始 Pi Session。`;
-  $('refresh-usage').disabled = !state.online || state.readOnly || !!usageRequest;
+  $('refresh-usage').disabled = !state.online || state.readOnly || !!state.nativeBridge || !!usageRequest;
   const scope = `${state.serverId}/${state.workspaceId}/${state.sessionId}`;
   if (scope !== traceScope) { traceScope = scope; traceNodes.clear(); $('transcript-list').replaceChildren(); }
   const entries = trace.entries || [], ids = new Set(entries.map(entry => entry.id));

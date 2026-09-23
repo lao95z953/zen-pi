@@ -2,11 +2,12 @@ import './isolate.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWebServer } from '../web/server.mjs';
+import { socketPathForSession } from '../extensions/session-sync/bridge.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = await mkdtemp(join(tmpdir(), 'pi-workspace-sessions-'));
@@ -217,6 +218,8 @@ try {
   assert.equal(state.mode, 'general'); assert.equal(state.readOnly, false); assert.equal(state.workspaceId, wsA.id);
   await assertNativeCwd(workspaceA);
   await call('mode', { sessionId: freshA, mode: 'research' });
+  const activeWebFile = JSON.parse(await readFile(join(dataDir, 'sessions.json'), 'utf8')).sessions.find(item => item.id === freshA).file;
+  assert((await lstat(socketPathForSession(activeWebFile))).isSocket(), 'Web runtime owns a live Session sentinel before CLI can open the file');
   state = await call('sessions', { workspaceId: wsB.id });
   const freshB = state.sessionId;
   assert.notEqual(freshB, freshA); assert.equal(state.mode, 'general'); assert.equal(state.workspaceId, wsB.id);

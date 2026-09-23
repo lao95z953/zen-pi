@@ -4,6 +4,7 @@ import { Transcript, visibleThinking } from './transcript.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
+import { constants, watch } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve, relative, isAbsolute } from 'node:path';
@@ -13,6 +14,8 @@ import { WEB_COMMANDS, TERMINAL_COMMANDS, safeCommands, commandCatalog, parseSla
 import { safeThinkingLevels, safeSessionInfo, safeForkMessages, safeCompactionResult, normalizeQueue } from './agent-controls.mjs';
 import { createSubagentManager } from './subagents.mjs';
 import { createSubagentBridge } from './subagent-bridge.mjs';
+import { connectNativeSession } from './session-sync-client.mjs';
+import { createSessionSyncBridge } from '../extensions/session-sync/bridge.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -29,11 +32,14 @@ const safeError = e => clip(e?.message || String(e), 1400).replace(/\b(?:Bearer\
 export class PiRpc {
   constructor({ command = 'pi', args = [], cwd, env = process.env, onEvent = () => {}, onExit = () => {} }) {
     this.pending = new Map(); this.buffer = ''; this.closed = false; this.onEvent = onEvent;
+    this.stopped = new Promise(resolve => { this.resolveStopped = resolve; });
     this.child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', chunk => {
       this.buffer += chunk;
-      if (Buffer.byteLength(this.buffer) > 16 * 1024 * 1024) { this.close(); onExit(new Error('Pi 回應超過讀取上限，請重新開啟對話。')); return; }
+      if (Buffer.byteLength(this.buffer) > 16 * 1024 * 1024) {
+        this.close(); this.stopped.then(() => onExit(new Error('Pi 回應超過讀取上限，請重新開啟對話。'))); return;
+      }
       let end;
       while ((end = this.buffer.indexOf('\n')) !== -1) {
         const line = this.buffer.slice(0, end).replace(/\r$/, ''); this.buffer = this.buffer.slice(end + 1);
@@ -48,6 +54,7 @@ export class PiRpc {
     // Diagnostics can contain provider headers. Never forward stderr to the browser.
     this.child.stderr.on('data', () => {});
     const ended = error => {
+      this.resolveStopped();
       if (this.closed) return;
       this.closed = true;
       for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(error); }
@@ -219,8 +226,8 @@ export async function createWebServer(options = {}) {
   };
   // Each request and RPC event retains its own conversation across awaits.
   const contexts = new AsyncLocalStorage(), runtimes = new Map(), subagentAdmissions = new Map();
-  const makeRuntime = id => ({ id, view: new ConversationView(imageStore), queuedImages: { steering: [], followUp: [] }, rpc: undefined, modelLabel: '', generation: 0,
-    stopping: false, runtimeCommands: undefined, loadedLocalRevision: undefined, thinkingLevel: null, commandFeedback: null,
+  const makeRuntime = id => ({ id, view: new ConversationView(imageStore), queuedImages: { steering: [], followUp: [] }, rpc: undefined, bridge: undefined, bridgeConnecting: false, ownership: undefined, ownershipPending: undefined, modelLabel: '', generation: 0,
+    stopping: false, runtimeCommands: undefined, loadedLocalRevision: undefined, nativeLeafId: undefined, nativeEventSeq: 0, nativeAgentSeq: 0, needsNativeReconcile: false, nativeStartTimer: undefined, thinkingLevel: null, commandFeedback: null,
     nativeSessionId: null, epoch: 0, operation: null, queue: { steering: [], followUp: [] }, serial: Promise.resolve() });
   const emptyRuntime = makeRuntime(null);
   const selectedRuntime = () => runtimes.get(manifest.activeId) || emptyRuntime;
@@ -232,6 +239,7 @@ export async function createWebServer(options = {}) {
   const clients = new Set(); const startedAt = Date.now(), serverId = randomUUID();
   let closed = false, revision = 0, navigation = Promise.resolve();
   let catalog = new Map(), workspaces = [], libraryIssues = [];
+  let publishedScanKey = '';
   let subagents, subagentBridge;
   const isDeleted = id => !!manifest.sessionPreferences[id]?.deletedAt;
   const active = () => { const id = contexts.getStore()?.id ?? manifest.activeId; return isDeleted(id) ? undefined : catalog.get(id) || manifest.sessions.find(s => s.id === id); };
@@ -249,13 +257,16 @@ export async function createWebServer(options = {}) {
   })).sort((a, b) => (deleted ? b.deletedAt.localeCompare(a.deletedAt) : b.updatedAt.localeCompare(a.updatedAt)));
   const selectedWorkspace = () => workspaces.find(w => w.id === (contexts.getStore()?.id ? active()?.workspaceId : manifest.workspaceId));
   const snapshot = () => contexts.run(selectedRuntime(), () => ({ ...view.snapshot(), sessionId: manifest.activeId, workspaceId: manifest.workspaceId, workspaces, sessions: sessions(), deletedSessions: sessions(true),
-    readOnly: active()?.origin === 'local', canContinue: active()?.origin === 'local' && active()?.readable !== false && !!selectedWorkspace()?.available,
-    origin: active()?.origin || null, libraryIssueCount: libraryIssues.length, commands: commandCatalog(runtime().runtimeCommands),
+    readOnly: active()?.origin === 'local' && (!runtime().bridge || runtime().bridge.closed), canContinue: active()?.origin === 'local' && (!runtime().bridge || runtime().bridge.closed) && active()?.readable !== false && !!selectedWorkspace()?.available,
+    nativeBridge: !!runtime().bridge && !runtime().bridge.closed, origin: active()?.origin || null, libraryIssueCount: libraryIssues.length,
+    commands: runtime().bridge && !runtime().bridge.closed ? [] : commandCatalog(runtime().runtimeCommands),
     model: runtime().modelLabel, thinkingLevel: runtime().thinkingLevel, operation: runtime().operation, queue: runtime().queue, queuedImages: runtime().queuedImages,
     subagents: subagents?.list({ workspaceId: manifest.workspaceId }) || [],
-    online: !!runtime().rpc && !runtime().rpc.closed && active()?.origin !== 'local', revision, startedAt, serverId }));
-  async function refreshLibrary() {
-    const discovered = await library.scan(); libraryIssues = discovered.issues;
+    online: (!!runtime().bridge && !runtime().bridge.closed) || (!!runtime().rpc && !runtime().rpc.closed && active()?.origin !== 'local'), revision, startedAt, serverId }));
+  const scanKey = discovered => JSON.stringify(discovered);
+  async function refreshLibrary(discovered) {
+    discovered ??= await library.scan();
+    libraryIssues = discovered.issues;
     const workspaceMap = new Map();
     const workspaceCache = new Map();
     async function workspaceFor(raw) {
@@ -300,6 +311,7 @@ export async function createWebServer(options = {}) {
         view.notice = '這份對話已移走或刪除，請從清單選擇其他對話。';
       });
     }
+    publishedScanKey = scanKey(discovered);
   }
   const broadcast = (type, payload = {}) => {
     // Background text is already retained in its own view. Do not resend the
@@ -329,7 +341,8 @@ export async function createWebServer(options = {}) {
     if (event.type === 'agent_start') { view.busy = true; view.error = ''; changed(); }
     if (event.type === 'agent_settled') {
       view.busy = false; view.transcript.settle(); if (view.streaming) view.streaming.streaming = false; view.streaming = null; runtime().queue = { steering: [], followUp: [] }; runtime().queuedImages = { steering: [], followUp: [] }; clearDialogs(); changed();
-      void rememberSession().then(changed).catch(() => {});
+      if (runtime().bridge) void reconcileNative(runtime());
+      else void rememberSession().then(changed).catch(() => {});
     }
     if (event.type === 'message_start' && event.message?.role === 'user') {
       const text = textOf(event.message.content), images = imageStore.project(event.message.content);
@@ -448,13 +461,43 @@ export async function createWebServer(options = {}) {
       changed();
     }
   };
-  async function rememberSession() {
-    const owner = runtime(), ownerId = owner.id, epoch = owner.epoch, targetRpc = owner.rpc;
-    const state = await targetRpc.request('get_state');
-    const file = resolve(state.sessionFile || '');
+  async function ensureWebOwnership(owner, file, sessionId) {
+    const previous = owner.ownershipPending;
+    const operation = Promise.resolve(previous).catch(() => {}).then(async () => {
+      if (owner.ownership?.sessionFile === file) return;
+      if (owner.rpc?.closed) throw new Error('Pi 已離線，無法取得 Session 寫入權。');
+      if (owner.ownership) { await owner.ownership.close(); owner.ownership = undefined; }
+      const targetRpc = owner.rpc;
+      const ownership = await createSessionSyncBridge({ sessionFile: file, sessionId, owner: 'web' });
+      if (closed || owner.rpc !== targetRpc || targetRpc.closed) { await ownership.close(); throw new Error('Pi 已離線，無法保留 Session 寫入權。'); }
+      owner.ownership = ownership;
+    });
+    owner.ownershipPending = operation;
+    try { await operation; }
+    catch (error) {
+      owner.rpc?.close();
+      throw new Error(`同一份對話已在另一個 Pi 程序開啟；Web 已停止寫入以避免衝突：${safeError(error)}`);
+    } finally { if (owner.ownershipPending === operation) owner.ownershipPending = undefined; }
+  }
+  async function checkedWebSessionFile(state) {
+    const file = resolve(state?.sessionFile || '');
     if (!inside(sessionDir, file) || !file.endsWith('.jsonl')) throw new Error('Pi 未使用指定的 Web 對話資料夾。');
     const parent = await fs.realpath(dirname(file));
     if (parent !== realSessionDir && !inside(realSessionDir, parent)) throw new Error('Pi 對話路徑不在允許範圍。');
+    return file;
+  }
+  async function stopOwnedRpc(owner) {
+    const rpc = owner.rpc;
+    rpc?.close();
+    await rpc?.stopped;
+    await owner.ownershipPending?.catch(() => {});
+    const ownership = owner.ownership;
+    if (ownership) { await ownership.close(); if (owner.ownership === ownership) owner.ownership = undefined; }
+  }
+  async function rememberSession() {
+    const owner = runtime(), ownerId = owner.id, epoch = owner.epoch, targetRpc = owner.rpc;
+    const state = await targetRpc.request('get_state');
+    const file = await checkedWebSessionFile(state);
     let draft = false;
     try { await fs.access(file); } catch (error) { if (error.code !== 'ENOENT') throw error; draft = true; }
     // A late autosave from before fork/clone must never attach its old file to
@@ -472,17 +515,20 @@ export async function createWebServer(options = {}) {
     owner.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : null;
     owner.nativeSessionId = state.sessionId;
     owner.view.busy = !!state.isStreaming || !!state.isCompacting;
+    if (record) await ensureWebOwnership(owner, file, state.sessionId);
     if (record) { await refreshLibrary(); await persist(); }
     return state;
   }
   async function loadView(save = true) {
     clearDialogs(); view.reset();
     let messages;
+    const current = await runtime().rpc.request('get_state');
+    const sessionFile = await checkedWebSessionFile(current);
+    await ensureWebOwnership(runtime(), sessionFile, current.sessionId);
     // get_messages is the model context and drops pre-compaction history. The
     // Web reader uses the saved active branch, through the existing file allowlist.
     try {
-      const current = await runtime().rpc.request('get_state');
-      const file = typeof current.sessionFile === 'string' ? await fs.realpath(current.sessionFile) : null;
+      const file = await fs.realpath(sessionFile);
       if (file && inside(realSessionDir, file)) {
         await library.scan();
         const { branch } = await library.read(file);
@@ -510,12 +556,12 @@ export async function createWebServer(options = {}) {
     if (others.length >= 8) {
       const idle = others.find(item => !item.view.busy && !item.operation && !item.stopping);
       if (!idle) throw fail(429, '已有 8 個對話執行中，請先完成或停止其中一個。');
-      contexts.run(idle, () => { idle.generation++; clearDialogs(); idle.rpc.close(); });
+      await contexts.run(idle, async () => { idle.generation++; clearDialogs(); await stopOwnedRpc(idle); });
       runtimes.delete(idle.id);
     }
     return contexts.run(owner, async () => {
       try { return await startRuntime(record, fork); }
-      catch (error) { owner.rpc?.close(); owner.view.busy = false; owner.view.error = safeError(error); changed(); throw error; }
+      catch (error) { await stopOwnedRpc(owner); owner.view.busy = false; owner.view.error = safeError(error); changed(); throw error; }
     });
   }
   async function startRuntime(record, fork) {
@@ -523,7 +569,8 @@ export async function createWebServer(options = {}) {
     runtime().generation++; const currentGeneration = runtime().generation;
     const draftState = record?.draftState;
     let restoreDraft = false;
-    runtime().rpc?.close(); clearDialogs(); view.reset(); runtime().runtimeCommands = undefined; runtime().modelLabel = '';
+    await stopOwnedRpc(owner);
+    clearDialogs(); view.reset(); runtime().runtimeCommands = undefined; runtime().modelLabel = '';
     const args = [...(options.piArgs || []), '--mode', 'rpc', '--session-dir', sessionDir,
       '-e', join(here, '../extensions/subagents/index.ts')];
     if (fork) args.push('--fork', fork);
@@ -544,7 +591,7 @@ export async function createWebServer(options = {}) {
     runtime().rpc = new PiRpc({ command: options.piBin || process.env.PI_WEB_PI_BIN || 'pi', args,
       cwd, env: { ...runtimeEnv, PI_WEB_SUBAGENT_SOCKET: subagentBridge.socketPath },
       onEvent: e => contexts.run(owner, () => { if (owner.generation === currentGeneration && !closed) consume(e); }),
-      onExit: error => contexts.run(owner, () => { if (owner.generation === currentGeneration && !closed) { view.error = safeError(error); view.busy = false; view.transcript.settle(); if (view.streaming) view.streaming.streaming = false; view.streaming = null; clearDialogs(); changed(); } }) });
+      onExit: error => contexts.run(owner, () => { if (owner.generation === currentGeneration) { owner.ownership?.close(); owner.ownership = undefined; } if (owner.generation === currentGeneration && !closed) { view.error = safeError(error); view.busy = false; view.transcript.settle(); if (view.streaming) view.streaming.streaming = false; view.streaming = null; clearDialogs(); changed(); } }) });
     try {
       // Keep the saved draft intact until every setting has been restored.
       const restoring = restoreDraft && draftState;
@@ -565,7 +612,7 @@ export async function createWebServer(options = {}) {
         await rememberSession(); changed();
       }
     } catch (error) {
-      runtime().generation++; runtime().rpc?.close(); runtime().rpc = undefined; clearDialogs(); view.reset(); runtime().modelLabel = '';
+      runtime().generation++; await stopOwnedRpc(owner); runtime().rpc = undefined; clearDialogs(); view.reset(); runtime().modelLabel = '';
       view.error = safeError(error); changed(); throw error;
     }
   }
@@ -582,7 +629,7 @@ export async function createWebServer(options = {}) {
       await start(record, continuation?.fork);
       await persist(); return { ...snapshot(), createdSessionId: record.id };
     } catch (e) {
-      runtime().rpc?.close(); runtime().rpc = undefined; clearDialogs(); view.reset();
+      await stopOwnedRpc(owner); runtime().rpc = undefined; clearDialogs(); view.reset();
       manifest.sessions = manifest.sessions.filter(s => s.id !== record.id); runtimes.delete(record.id);
       if (manifest.activeId === record.id) manifest.activeId = null;
       await refreshLibrary(); await persist(); view.error = safeError(e); changed(); throw e;
@@ -592,11 +639,20 @@ export async function createWebServer(options = {}) {
   async function loadLocal(record) {
     let owner = runtimes.get(record.id);
     if (!owner) { owner = makeRuntime(record.id); runtimes.set(record.id, owner); }
-    return contexts.run(owner, () => loadLocalRuntime(record));
+    return contexts.run(owner, () => loadLocalRuntime(record, false, true));
   }
-  async function loadLocalRuntime(record) {
-    const { branch, revision } = await library.read(record.file);
-    runtime().generation++; runtime().rpc?.close(); runtime().rpc = undefined; clearDialogs(); view.reset(); runtime().modelLabel = ''; runtime().runtimeCommands = undefined;
+  async function loadLocalRuntime(record, preserveBridge = false, select = false) {
+    const owner = runtime(), generation = owner.generation, bridge = owner.bridge, eventSeq = owner.nativeEventSeq;
+    const { branch, revision, header } = await library.read(record.file,
+      bridge && !bridge.closed ? { leafId: owner.nativeLeafId } : undefined);
+    if (closed || owner.generation !== generation || !select && manifest.activeId !== record.id ||
+        preserveBridge && (owner.bridge !== bridge || owner.nativeEventSeq !== eventSeq || owner.view.busy)) return false;
+    if (bridge && !bridge.closed && header.id !== bridge.hello.sessionId) {
+      bridge.close(); owner.bridge = undefined; owner.nativeLeafId = undefined;
+      throw new Error('原生 Pi 的 Session 檔案已更換；同步連線已中止，請重新開啟。');
+    }
+    if (!preserveBridge) { owner.generation++; owner.bridge?.close(); owner.bridge = undefined; owner.nativeLeafId = undefined; }
+    owner.rpc?.close(); owner.rpc = undefined; clearDialogs(); view.reset(); owner.modelLabel = ''; owner.runtimeCommands = undefined;
     let hasModeState = false;
     for (const entry of branch) {
       if (entry.type === 'message') view.message(entry.message);
@@ -610,29 +666,120 @@ export async function createWebServer(options = {}) {
       if (!hasModeState && entry.type === 'custom' && entry.customType === 'pentest-study-focus-v1') view.mode = 'study';
     }
     view.transcript.settle(); view.busy = false; view.error = '';
-    manifest.activeId = record.id; manifest.workspaceId = record.workspaceId;
-    runtime().loadedLocalRevision = revision;
+    if (select) { manifest.activeId = record.id; manifest.workspaceId = record.workspaceId; }
+    owner.loadedLocalRevision = revision; owner.nativeSessionId = header.id;
+    owner.needsNativeReconcile = false;
     if (!selectedWorkspace()?.available) view.notice = '這個 Workspace 的資料夾目前不存在，仍可檢視對話。';
+    if (preserveBridge && owner.bridge && !owner.bridge.closed) {
+      owner.modelLabel = '原生 Pi 終端';
+      view.notice = '已連接原生 Pi 終端；一般訊息可從兩邊即時傳送。';
+      return true;
+    }
+    if (!selectedWorkspace()?.available) return true;
+    await attachNative(owner, record);
+    return true;
+  }
+  async function attachNative(owner, record) {
+    if (closed || owner.bridge && !owner.bridge.closed || owner.bridgeConnecting || !owner.nativeSessionId) return false;
+    owner.bridgeConnecting = true;
+    const generation = owner.generation;
+    let bridge, connecting = true, disconnected = false;
+    const buffered = [];
+    const consumeNative = event => contexts.run(owner, () => {
+      if (closed || owner.generation !== generation || owner.bridge !== bridge || bridge?.closed) return;
+      owner.nativeEventSeq++;
+      if (event.type === 'session_tree') {
+        if (Object.hasOwn(event, 'newLeafId')) owner.nativeLeafId = event.newLeafId;
+        owner.needsNativeReconcile = true;
+        void reconcileNative(owner); return;
+      }
+      if (event.type === 'session_sync_invalidate') { owner.needsNativeReconcile = true; void reconcileNative(owner); return; }
+      if (event.type === 'agent_start' || event.type === 'message_start' && event.message?.role === 'user') {
+        owner.nativeAgentSeq++; clearTimeout(owner.nativeStartTimer); owner.nativeStartTimer = undefined;
+      }
+      if (event.type === 'agent_settled') {
+        owner.nativeLeafId = event.sessionSyncLeafId === null || typeof event.sessionSyncLeafId === 'string' && event.sessionSyncLeafId
+          ? event.sessionSyncLeafId : undefined;
+        owner.needsNativeReconcile = true;
+      }
+      consume(event);
+    });
+    const disconnect = () => contexts.run(owner, () => {
+      if (connecting) { disconnected = true; return; }
+      if (closed || owner.generation !== generation || owner.bridge !== bridge) return;
+      owner.nativeEventSeq++; owner.bridge = undefined; owner.nativeLeafId = undefined; owner.modelLabel = '';
+      clearTimeout(owner.nativeStartTimer); owner.nativeStartTimer = undefined;
+      owner.view.busy = false; owner.view.transcript.settle();
+      if (owner.view.streaming) owner.view.streaming.streaming = false;
+      owner.view.streaming = null;
+      owner.queue = { steering: [], followUp: [] }; owner.queuedImages = { steering: [], followUp: [] };
+      owner.view.notice = '原生 Pi 同步連線已中斷；目前可繼續閱讀紀錄。'; changed();
+      scheduleAutoRefresh(0);
+    });
+    try {
+      bridge = await connectNativeSession({ sessionFile: record.file, sessionId: owner.nativeSessionId,
+        onEvent: event => { if (connecting) buffered.push(event); else consumeNative(event); }, onClose: disconnect });
+    } catch (error) {
+      owner.view.notice = `原生 Pi 同步連線未啟用：${safeError(error)}`;
+    } finally { owner.bridgeConnecting = false; }
+    if (bridge && !bridge.closed && !disconnected && owner.generation === generation && !closed) {
+      owner.bridge = bridge; owner.modelLabel = '原生 Pi 終端';
+      owner.nativeLeafId = bridge.hello.leafId;
+      owner.needsNativeReconcile = true;
+      owner.view.busy = !!bridge.hello.busy;
+      owner.view.notice = '已連接原生 Pi 終端；一般訊息可從兩邊即時傳送。';
+      connecting = false;
+      for (const event of buffered) consumeNative(event);
+      if (!owner.view.busy) void reconcileNative(owner);
+      return true;
+    }
+    connecting = false; bridge?.close(); if (disconnected) scheduleAutoRefresh(0); return false;
+  }
+  async function reconcileNative(owner) {
+    if (!owner.bridge || owner.bridge.closed || owner.view.busy || closed || manifest.activeId !== owner.id) return;
+    const current = catalog.get(owner.id);
+    if (!current || current.origin !== 'local') return;
+    try {
+      if (await contexts.run(owner, () => loadLocalRuntime(current, true))) changed();
+      else scheduleAutoRefresh();
+    } catch { scheduleAutoRefresh(); }
   }
   async function showLocal(record) {
     await loadLocal(record);
     await persist(); changed(); return snapshot();
   }
-  async function refreshCatalogView() {
-    await refreshLibrary();
-    if (active()?.origin === 'local') {
-      if (active().revision !== runtime().loadedLocalRevision) {
-        try { await loadLocal(active()); }
-        catch (e) { view.error = safeError(e); }
+  const catalogViewKey = () => JSON.stringify({ sessions: sessions(), deletedSessions: sessions(true), workspaces,
+    issues: libraryIssues, activeId: manifest.activeId, workspaceId: manifest.workspaceId,
+    localRevision: active()?.origin === 'local' ? runtime().loadedLocalRevision : null,
+    error: view.error, notice: view.notice });
+  async function refreshCatalogView(discovered, automatic = false) {
+    const before = contexts.run(selectedRuntime(), catalogViewKey);
+    await refreshLibrary(discovered);
+    await contexts.run(selectedRuntime(), async () => {
+      const selected = active(), owner = runtime();
+      if (selected?.origin === 'local' && manifest.activeId === owner.id) {
+        if ((selected.revision !== owner.loadedLocalRevision || owner.needsNativeReconcile) &&
+            (!owner.bridge || !owner.view.busy)) {
+          try {
+            const loaded = owner.bridge ? await loadLocalRuntime(selected, true) : await loadLocalRuntime(selected);
+            if (!loaded) { owner.needsNativeReconcile = true; scheduleAutoRefresh(); }
+          } catch (e) {
+            if (automatic && selected.readable !== false && (e.code === 'ENOENT' || /讀取期間更新/.test(e.message))) publishedScanKey = '';
+            else owner.view.error = safeError(e);
+          }
+        }
+        if (manifest.activeId === owner.id) owner.view.notice = owner.bridge && !owner.bridge.closed ?
+          '已連接原生 Pi 終端；一般訊息可從兩邊即時傳送。' :
+          selectedWorkspace()?.available ? '' : '這個 Workspace 的資料夾目前不存在，仍可檢視對話。';
       }
-      view.notice = selectedWorkspace()?.available ? '' : '這個 Workspace 的資料夾目前不存在，仍可檢視對話。';
-    }
-    await persist(); changed(); return snapshot();
+    });
+    if (contexts.run(selectedRuntime(), catalogViewKey) !== before) { await persist(); contexts.run(selectedRuntime(), changed); }
+    return snapshot();
   }
   const requireActive = body => {
     if (!body.sessionId || body.sessionId !== manifest.activeId || runtime().id !== body.sessionId) throw fail(409, '目前對話已在另一個頁面切換，請重新載入。');
-    if (active()?.origin === 'local') throw fail(409, '這是本機對話紀錄；請先按「接續對話」。');
-    if (!runtime().rpc || runtime().rpc.closed) throw fail(503, 'Pi 已離線，請重新開啟對話。');
+    if (active()?.origin === 'local' && (!runtime().bridge || runtime().bridge.closed)) throw fail(409, '這是本機對話紀錄；請先按「接續對話」。');
+    if ((!runtime().rpc || runtime().rpc.closed) && (!runtime().bridge || runtime().bridge.closed)) throw fail(503, 'Pi 已離線，請重新開啟對話。');
   };
   async function promptImages(ids) {
     const owner = runtime(), rpc = owner.rpc, epoch = owner.epoch;
@@ -683,8 +830,9 @@ export async function createWebServer(options = {}) {
       reason = deleteReason(record.id); if (reason) throw fail(409, reason);
       manifest.sessionPreferences[record.id] = { ...manifest.sessionPreferences[record.id], deletedAt: new Date().toISOString() };
       const owner = runtimes.get(record.id);
-      if (owner) contexts.run(owner, () => {
-        owner.epoch++; owner.generation++; clearDialogs(); owner.rpc?.close(); runtimes.delete(record.id);
+      if (owner) await contexts.run(owner, async () => {
+        owner.epoch++; owner.generation++; clearDialogs(); owner.bridge?.close();
+        await stopOwnedRpc(owner); runtimes.delete(record.id);
       });
       if (manifest.activeId === record.id) {
         manifest.activeId = null;
@@ -748,6 +896,8 @@ export async function createWebServer(options = {}) {
     runtimes.delete(source.id); owner.id = record.id; runtimes.set(record.id, owner);
     manifest.sessions.push(record); manifest.activeId = record.id;
     try {
+      const state = await owner.rpc.request('get_state');
+      await ensureWebOwnership(owner, await checkedWebSessionFile(state), state.sessionId);
       await owner.rpc.request('set_session_name', { name: record.title });
       await loadView(); await persist(); changed();
       return { ok: true, state: snapshot(), restoredPrompt: clone ? '' : clip(result?.text, 32000) };
@@ -901,6 +1051,8 @@ export async function createWebServer(options = {}) {
         if (clients.size >= 16) throw fail(429, '開啟頁面過多，請關閉不使用的分頁。');
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.write(`retry: 1500\nevent: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`); clients.add(res);
+        // The library may have changed while no browser was connected.
+        scheduleAutoRefresh(0);
         const heartbeat = setInterval(() => { if (res.writableLength > 1024 * 1024) res.destroy(); else res.write(': keepalive\n\n'); }, 20000); heartbeat.unref();
         req.on('close', () => { clearInterval(heartbeat); clients.delete(res); }); return;
       }
@@ -915,6 +1067,7 @@ export async function createWebServer(options = {}) {
       }
       if (url.pathname === '/api/usage') {
         requireActive(body);
+        if (runtime().bridge) throw fail(409, '原生 Pi 對話的用量請在終端查看。');
         if (body.workspaceId !== manifest.workspaceId) throw fail(409, 'Workspace 已切換。');
         const owner = runtime(), targetRpc = owner.rpc, epoch = owner.epoch;
         const info = safeSessionInfo(await targetRpc.request('get_session_stats', {}, 5000));
@@ -949,6 +1102,12 @@ export async function createWebServer(options = {}) {
       if (url.pathname === '/api/stop') {
         requireActive(body);
         if (runtime().stopping) throw fail(409, '正在停止，請稍候。');
+        if (runtime().bridge) {
+          runtime().stopping = true;
+          try { await runtime().bridge.abort(); json(res, { ok: true }); }
+          finally { runtime().stopping = false; }
+          return;
+        }
         const targetRpc = runtime().rpc, targetId = manifest.activeId; runtime().stopping = true;
         try {
           for (const d of view.dialogs.values()) targetRpc.send({ type: 'extension_ui_response', id: d.id, cancelled: true }); clearDialogs();
@@ -967,6 +1126,18 @@ export async function createWebServer(options = {}) {
         requireActive(body);
         const owner = runtime();
         if (!['steer', 'follow_up', 'clear'].includes(body.action)) throw fail(400, '待處理訊息操作無效。');
+        if (owner.bridge) {
+          if (body.action === 'clear') throw fail(409, '原生 Pi 的待送訊息請在終端管理。');
+          if (!view.busy || owner.stopping) throw fail(409, '只有回覆執行中可以追加指示。');
+          if (body.imageIds?.length) throw fail(400, '原生 Pi 同步目前只支援文字訊息。');
+          const message = ensureText(body.message);
+          if (parseSlash(message)) throw fail(400, '原生 Pi 的 Slash 指令請在終端使用。');
+          const key = body.action === 'steer' ? 'steering' : 'followUp';
+          if (owner.queue.steering.length + owner.queue.followUp.length >= 20) throw fail(429, '最多保留 20 則待處理訊息。');
+          await owner.bridge.prompt(message, body.action === 'steer' ? 'steer' : 'followUp');
+          owner.queue[key].push(message); owner.queuedImages[key].push([]); changed();
+          json(res, { ok: true, state: snapshot() }); return;
+        }
         if (body.action === 'clear') {
           const restored = normalizeQueue(await owner.rpc.request('clear_queue')), images = restoredImages(owner, restored);
           owner.queue = { steering: [], followUp: [] }; owner.queuedImages = { steering: [], followUp: [] }; changed(); json(res, { ok: true, state: snapshot(), restored, restoredImages: images }); return;
@@ -986,7 +1157,8 @@ export async function createWebServer(options = {}) {
       }
       // Delegated tasks remain available while the parent is running.
       if (url.pathname === '/api/subagents') {
-        requireActive(body); const job = await startSubagent(body); json(res, { ok: true, job, state: snapshot() }); return;
+        requireActive(body); if (runtime().bridge) throw fail(409, '原生 Pi 對話的 Sub Agent 請在終端操作。');
+        const job = await startSubagent(body); json(res, { ok: true, job, state: snapshot() }); return;
       }
       if (url.pathname === '/api/subagents/cancel') {
         const job = subagents.get(body.id);
@@ -1031,6 +1203,7 @@ export async function createWebServer(options = {}) {
           }
         }
         requireActive(body);
+        if (runtime().bridge && url.pathname !== '/api/prompt') throw fail(409, '這段對話由原生 Pi 終端管理；目前可從 Web 傳送一般訊息。');
         if (url.pathname === '/api/side-chat') return sideChat(body.message);
         if (url.pathname === '/api/thinking') return thinkingMenu(body.level);
         if (url.pathname === '/api/stats') return sessionInfo();
@@ -1043,6 +1216,27 @@ export async function createWebServer(options = {}) {
           requireIdle(); return changeModel(ensureText(body.provider, 200), ensureText(body.modelId, 500));
         }
         if (url.pathname === '/api/prompt') {
+          if (runtime().bridge) {
+            if (body.imageIds?.length) throw fail(400, '原生 Pi 同步目前只支援文字訊息。');
+            const message = ensureText(body.message);
+            if (parseSlash(message)) throw fail(400, '原生 Pi 的 Slash 指令請在終端使用。');
+            requireIdle();
+            const owner = runtime(), bridge = owner.bridge, agentSeq = owner.nativeAgentSeq;
+            view.error = ''; view.busy = true; changed();
+            try { await bridge.prompt(message); }
+            catch (error) { view.busy = false; view.error = safeError(error); changed(); throw error; }
+            if (owner.bridge === bridge && owner.nativeAgentSeq === agentSeq && !bridge.closed) {
+              clearTimeout(owner.nativeStartTimer);
+              owner.nativeStartTimer = setTimeout(() => contexts.run(owner, () => {
+                if (owner.bridge !== bridge || bridge.closed || owner.nativeAgentSeq !== agentSeq || !owner.view.busy) return;
+                owner.nativeStartTimer = undefined; owner.view.busy = false;
+                owner.view.error = '原生 Pi 尚未回報開始處理訊息；請在終端確認是否收到。';
+                owner.needsNativeReconcile = true; changed(); scheduleAutoRefresh();
+              }), 10000);
+              owner.nativeStartTimer.unref();
+            }
+            return { ok: true, state: snapshot() };
+          }
           const images = await promptImages(body.imageIds);
           let message = images.length ? ensureText(body.message || '請查看這些圖片。') : ensureText(body.message);
           if (images.length && parseSlash(message)) throw fail(400, '圖片請搭配一般訊息送出；Slash 指令不會接收圖片。');
@@ -1133,11 +1327,108 @@ export async function createWebServer(options = {}) {
   if (active() && options.restore !== false) {
     try { if (active().origin === 'local') await showLocal(active()); else await start(active()); } catch (e) { view.error = safeError(e); }
   }
+  const watchedRoots = new Map();
+  let refreshDelay, refreshInFlight = false, refreshAgain = false, pendingScanKey = null;
+  async function syncWatchers() {
+    const available = new Set();
+    for (const root of roots) {
+      try {
+        const real = await fs.realpath(root);
+        if ((await fs.stat(real)).isDirectory()) available.add(real);
+      } catch { /* A configured root may be created later; the fallback scan will find it. */ }
+    }
+    for (const [root, watcher] of watchedRoots) if (!available.has(root)) { watcher.close(); watchedRoots.delete(root); }
+    for (const root of available) {
+      if (watchedRoots.has(root)) continue;
+      let watcher;
+      try { watcher = watch(root, { recursive: true, persistent: false }, () => scheduleAutoRefresh()); }
+      catch {
+        try { watcher = watch(root, { persistent: false }, () => scheduleAutoRefresh()); }
+        catch { continue; }
+      }
+      watchedRoots.set(root, watcher);
+      watcher.on('error', () => { if (watchedRoots.get(root) === watcher) watchedRoots.delete(root); watcher.close(); });
+    }
+  }
+  async function hasUnfinishedExternalWrite(discovered) {
+    const changedFiles = new Set();
+    for (const item of discovered.sessions) {
+      if (inside(realSessionDir, item.file) || catalog.get(item.id)?.revision === item.revision) continue;
+      changedFiles.add(item.file);
+    }
+    for (const issue of discovered.issues) if (issue.file?.endsWith('.jsonl') && !inside(realSessionDir, issue.file)) changedFiles.add(issue.file);
+    for (const file of changedFiles) {
+      let handle;
+      try {
+        const current = await fs.lstat(file);
+        if (!current.isFile()) continue;
+        if (!current.size) return true;
+        handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const before = await handle.stat(), last = Buffer.alloc(1);
+        const { bytesRead } = await handle.read(last, 0, 1, before.size - 1);
+        const after = await handle.stat();
+        if (bytesRead !== 1 || last[0] !== 10 || before.size !== after.size || before.mtimeMs !== after.mtimeMs) return true;
+      } catch (error) { if (['ENOENT', 'ENOTDIR', 'EIO'].includes(error.code)) return true; }
+      finally { await handle?.close(); }
+    }
+    return false;
+  }
+  function scheduleAutoRefresh(delay = 250) {
+    if (closed || !clients.size) return;
+    clearTimeout(refreshDelay);
+    refreshDelay = setTimeout(() => {
+      refreshDelay = undefined;
+      if (refreshInFlight) { refreshAgain = true; return; }
+      refreshInFlight = true;
+      void mutate(async () => {
+        if (runtime().id !== manifest.activeId) { refreshAgain = true; return; }
+        const discovered = await library.scan(), key = scanKey(discovered);
+        if (closed) return;
+        const selected = catalog.get(manifest.activeId), owner = selectedRuntime();
+        const unloaded = selected?.origin === 'local' && !owner.view.busy &&
+          (selected.revision !== owner.loadedLocalRevision || owner.needsNativeReconcile);
+        if (key === publishedScanKey && !unloaded) { pendingScanKey = null; return; }
+        if (key !== pendingScanKey) { pendingScanKey = key; refreshAgain = true; return; }
+        if (await hasUnfinishedExternalWrite(discovered)) { pendingScanKey = null; return; }
+        pendingScanKey = null;
+        await refreshCatalogView(discovered, true);
+        if (!publishedScanKey) refreshAgain = true;
+      }).catch(() => {}).finally(() => {
+        refreshInFlight = false;
+        if (refreshAgain) { refreshAgain = false; scheduleAutoRefresh(); }
+      });
+    }, delay);
+    refreshDelay.unref();
+  }
+  await syncWatchers();
   const refreshTimer = setInterval(() => {
-    if (!clients.size || view.busy || runtime().stopping || closed) return;
-    void mutate(async () => { if (view.busy || runtime().stopping) return; await refreshCatalogView(); }).catch(() => {});
+    if (closed) return;
+    void syncWatchers().then(() => scheduleAutoRefresh(0));
   }, 15000); refreshTimer.unref();
-  return { server, view, snapshot, async close() { closed = true; clearInterval(refreshTimer); for (const owner of runtimes.values()) contexts.run(owner, () => { owner.generation++; clearDialogs(); owner.rpc?.close(); }); await subagents?.close(); await subagentBridge?.close(); for (const res of clients) res.end(); clients.clear(); await persistQueue.catch(() => {}); const stopped = new Promise(resolve => server.close(resolve)); server.closeAllConnections(); await stopped; } };
+  const bridgeTimer = setInterval(() => {
+    if (closed || !clients.size) return;
+    const record = active(), owner = selectedRuntime();
+    if (record?.origin !== 'local' || owner.bridge && !owner.bridge.closed || owner.bridgeConnecting || !owner.nativeSessionId ||
+        !workspaces.find(item => item.id === record.workspaceId)?.available) return;
+    void mutate(async () => {
+      if (manifest.activeId !== owner.id || owner.bridge && !owner.bridge.closed || owner.bridgeConnecting) return;
+      if (await attachNative(owner, record)) changed();
+    }).catch(() => {});
+  }, 1500); bridgeTimer.unref();
+  return { server, view, snapshot, async close() {
+    closed = true; clearInterval(refreshTimer); clearInterval(bridgeTimer); clearTimeout(refreshDelay);
+    for (const watcher of watchedRoots.values()) watcher.close(); watchedRoots.clear();
+    const releases = [];
+    for (const owner of runtimes.values()) contexts.run(owner, () => {
+      owner.generation++; clearDialogs(); owner.bridge?.close(); clearTimeout(owner.nativeStartTimer);
+      releases.push(stopOwnedRpc(owner));
+    });
+    await Promise.allSettled(releases);
+    await subagents?.close(); await subagentBridge?.close();
+    for (const res of clients) res.end(); clients.clear();
+    await persistQueue.catch(() => {});
+    const stopped = new Promise(resolve => server.close(resolve)); server.closeAllConnections(); await stopped;
+  } };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -31,9 +31,17 @@ npm run web
 
 開啟 <http://127.0.0.1:4318>。Web server 只監聽 loopback；手機存取可依 [Web UI 文件](docs/web.md)設定 Tailscale Serve。Web UI 可以讀取本機 Pi Session，並能以 Pi 的權限操作 Workspace；不要將此服務直接暴露到公網。
 
+同時在終端操作 Web 的對話，在另一個終端執行：
+
+```bash
+npm run cli -- attach
+```
+
+終端與 Web 共用同一個 Pi 程序及 Session，可雙向即時收發訊息。原生 `pi` TUI 開啟的 Session 也可由 Web 即時接入；Web 對這類 Session 只傳送一般文字，模型與 Slash 指令仍在原生終端操作。詳見 [Session 同步](docs/web.md#cli-與-web-同步)。
+
 ## 功能與限制
 
-- Workspace 依對話工作目錄分組，列出 Web 與本機 Pi Session。Side Chat 和 Fork 顯示在父 Session 底下，可重新命名、移到回收清單與還原。
+- Workspace 依對話工作目錄分組，列出 Web 與本機 Pi Session。本機對話更新會自動顯示；仍在原生 Pi TUI 執行的 Session 可供 Web 即時接入。Side Chat 和 Fork 顯示在父 Session 底下，可重新命名、移到回收清單與還原。
 - 輸入框可貼上圖片，或從電腦、手機選檔；提供縮圖、放大與移除。支援 PNG、JPEG、WebP、GIF，每則最多 4 張、每張 5 MiB、合計 8 MiB。圖片可隨生成中的補充訊息送出，未交付的附件可恢復至原 Session 草稿。模型需支援圖片輸入。
 - Study 根據目前筆記與已展示的來源整理 Wiki 和理解紀錄；Research 保存查證進度。來源引用記錄版本與片段，模型的推論仍需檢查。
 - LLM Wiki 預設位於 `~/.pi/llm-wiki`。用 `/wiki use ./llm-wiki` 依目前 Workspace 掛載其他位置，`/wiki default` 回預設；來源筆記庫保持不變。也可在 `ronny.json` 的 `llmWikis` 登記別名。

@@ -30,7 +30,21 @@ tailscale serve --bg --yes http://127.0.0.1:4318
 
 ## Session 與版面
 
-側欄依 Workspace 顯示對話。既有 CLI Session 可唯讀檢視；按「接續對話」會建立 Web 分支，原紀錄仍保留。Side Chat、Fork 和接續分支顯示在 parent 底下，可展開、重新命名、移到回收清單及還原。刪除單筆不會刪除子對話或 Pi 的原始 Session 檔，也不會釋放磁碟空間。
+側欄依 Workspace 顯示對話。CLI Session 的新增與完整寫入會自動更新；尚未由原生 Pi 終端開啟的舊紀錄保持唯讀，按「接續對話」會建立 Web 分支，原紀錄仍保留。Side Chat、Fork 和接續分支顯示在 parent 底下，可展開、重新命名、移到回收清單及還原。刪除單筆不會刪除子對話或 Pi 的原始 Session 檔，也不會釋放磁碟空間。
+
+## CLI 與 Web 同步
+
+Web 建立的對話由 Web 服務中的 Pi 程序執行。要在終端同時操作，在 Zen Pi 專案目錄執行：
+
+```bash
+npm run cli -- attach
+```
+
+終端客戶端會加入 Web 目前選取的 Session；Web 與終端的訊息、串流回覆會即時出現在兩邊。終端可用 `/sessions` 查看 ID、`/open <ID>` 切換、`/new` 建立、`/follow` 排到下一輪、`/steer` 立即補充、`/stop` 停止、`/exit` 離開。Web 正在回覆時，終端送出的一般訊息會自動排入下一輪。服務使用其他 port 時加上 `--url http://127.0.0.1:<port>`；客戶端只接受本機 loopback。Web 側欄下方的「在終端同步對話」也會顯示啟動指令。若執行 `npm link` 安裝專案提供的命令，亦可使用 `zen-pi attach`。
+
+原生 `pi` TUI 載入新版 Zen Pi Extension 後，會在私有 Unix socket 公布目前 Session 的即時事件。Web 開啟同一筆本機對話時會接入該程序，兩邊都能傳送一般文字；Web 可停止生成，圖片、Slash 指令、模型切換、Sub Agent 等進階操作留在原生 TUI。原生 TUI 關閉後，Web 回到自動更新的唯讀紀錄。單一程序持有寫入權；第二個載入此 Extension 的 Pi 程序若開啟同一檔案，會退出以避免並行寫入。Pi 在 Extension 啟動前可能已讀取或遷移 Session，未載入 Extension 的外部程序也不受這項防護；請用上述終端客戶端加入 Web 對話，不要另用 `pi --session <Web 檔案>` 同時寫入。
+
+若 Pi 異常關閉並留下 Session socket，下一個程序會拒絕接管。先確認 Web 與原生 Pi 都沒有使用該 Session，再依錯誤訊息中的路徑移除遺留 socket，重新開啟對話。
 
 左右側欄與上方工具可各自收合；「專注閱讀」會收起三個區域，版面偏好保存在目前瀏覽器。版面固定在目前視窗內：上方版面按鈕與輸入框保持可見，長對話、對話清單及右側內容各自捲動。右側的關閉按鈕和分頁不會跟著來源清單捲走。串流回覆時可向上捲動閱讀，按「回到最新內容」才恢復跟隨。
 

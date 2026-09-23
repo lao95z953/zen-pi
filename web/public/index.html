@@ -29,7 +29,7 @@
     <p id="library-warning" class="library-warning" hidden></p>
     <div id="session-list" role="list" aria-label="對話與子對話"><p class="muted small">還沒有對話。</p></div>
     <button id="open-recycle" class="recycle-button" type="button" aria-haspopup="dialog"><span aria-hidden="true">↶</span> 回收清單 <span id="recycle-count">0</span></button>
-    <div class="sidebar-footer"><span class="connection-dot" id="connection-dot"></span><span id="connection-label">正在連線</span><p id="model-label">模型資訊載入中</p></div>
+    <div class="sidebar-footer"><button id="open-cli-sync" class="cli-sync-button" type="button" aria-haspopup="dialog">⌘ 在終端同步對話</button><span class="connection-dot" id="connection-dot"></span><span id="connection-label">正在連線</span><p id="model-label">模型資訊載入中</p></div>
   </aside>
   <main class="workspace">
     <div class="reading-toolbar" aria-label="閱讀版面">
@@ -104,6 +104,12 @@
     <div class="dialog-heading"><h2>加入 Workspace</h2><button class="icon-button" id="close-workspace" aria-label="關閉 Workspace 設定">×</button></div>
     <p class="muted small">輸入 T14 上已存在的資料夾。之後的新對話會使用這個工作目錄。</p>
     <form id="workspace-form"><label for="workspace-input" class="workspace-input-label">資料夾路徑</label><input id="workspace-input" name="path" placeholder="~/projects/my-project" maxlength="4096" autocomplete="off" spellcheck="false" required><p class="dialog-error" id="workspace-error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="cancel-workspace">取消</button><button type="submit" class="primary" id="save-workspace">加入 Workspace</button></div></form>
+  </dialog>
+  <dialog id="cli-sync-dialog" class="dialog" aria-labelledby="cli-sync-title">
+    <div class="dialog-heading"><h2 id="cli-sync-title">在終端同步對話</h2><button class="icon-button" id="close-cli-sync" aria-label="關閉終端同步說明">×</button></div>
+    <p>在 Zen Pi 專案目錄執行以下指令。終端與 Web 會連到同一個執行中的對話，兩邊送出的訊息會即時顯示。</p>
+    <div class="cli-sync-command"><code id="cli-sync-command">npm run cli -- attach</code><button id="copy-cli-sync" type="button">複製</button></div>
+    <p id="cli-sync-hint" class="small muted"></p><p id="cli-sync-status" class="small muted" role="status" hidden></p>
   </dialog>
   <dialog id="session-manage-dialog" class="dialog session-manage-dialog" aria-labelledby="session-manage-title">
     <div class="dialog-heading"><h2 id="session-manage-title">對話操作</h2><button id="close-session-manage" class="icon-button" aria-label="關閉對話操作">×</button></div>
