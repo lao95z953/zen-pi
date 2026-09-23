@@ -53,6 +53,12 @@ try {
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       await page.goto(base); await page.locator('#messages .message').first().waitFor();
       await inspect(page, `${name} ${width}: initial`);
+      if (width === 1920 && reducedMotion === 'reduce') {
+        await page.locator('#open-cli-sync').click();
+        assert.equal(await page.locator('#cli-sync-command').textContent(), 'npm run cli -- attach');
+        assert(await page.locator('#cli-sync-dialog').isVisible(), `${name}: terminal sync instructions are visible`);
+        await page.locator('#close-cli-sync').click();
+      }
       await page.locator('#open-commands').click();
       await page.locator('#help-query').fill('掛載');
       assert.equal(await page.locator('#help-results .help-option').count(), 1, `${name} ${width}: subcommands are searchable`);

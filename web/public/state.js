@@ -133,7 +133,7 @@ export function workspaceControls(snapshot, { connected, working }) {
   return {
     browse: connected && !working,
     start: connected && !working && available,
-    mode: idle && available && !snapshot.readOnly,
+    mode: idle && available && !snapshot.readOnly && !snapshot.nativeBridge,
     input: available && !snapshot.readOnly,
     send: idle && available && !snapshot.readOnly && (snapshot.online || !snapshot.sessionId),
     continue: idle && snapshot.readOnly === true && snapshot.canContinue === true && available,
@@ -246,6 +246,7 @@ export function acceptsCommandResponse(current, requested, response) {
 
 export function modelDisabledReason(snapshot, { connected, working }) {
   if (snapshot.readOnly) return '先接續對話，才能切換模型。';
+  if (snapshot.nativeBridge) return '這段對話由原生 Pi 終端管理；請在該終端切換模型。';
   if (snapshot.busy) return '回覆完成或停止後，才能切換模型。';
   if (snapshot.operation) return '目前操作完成後，才能切換模型。';
   if (!connected) return '連線恢復後，才能切換模型。';
@@ -258,13 +259,14 @@ export function modelDisabledReason(snapshot, { connected, working }) {
 export function agentControls(snapshot, { connected, working, queuePending = false, agentPending = false }) {
   const available = !Array.isArray(snapshot.workspaces) || selectedWorkspace(snapshot)?.available === true;
   const writable = connected && available && !!snapshot.sessionId && snapshot.online && !snapshot.readOnly;
+  const managed = writable && !snapshot.nativeBridge;
   return {
-    inspect: writable && !working && !snapshot.operation,
-    change: writable && !working && !snapshot.busy && !snapshot.operation,
-    side: writable && !working,
+    inspect: managed && !working && !snapshot.operation,
+    change: managed && !working && !snapshot.busy && !snapshot.operation,
+    side: managed && !working,
     queue: writable && snapshot.busy && !snapshot.operation && !queuePending,
-    clearQueue: writable && !snapshot.operation && !queuePending,
-    createAgent: writable && !snapshot.operation && !agentPending,
+    clearQueue: managed && !snapshot.operation && !queuePending,
+    createAgent: managed && !snapshot.operation && !agentPending,
     cancelAgent: connected && !agentPending,
   };
 }

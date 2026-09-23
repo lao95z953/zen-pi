@@ -195,7 +195,7 @@ export async function createSessionLibrary({ roots, piPackageDir, maxBytes = DEF
     return operation;
   }
 
-  async function read(file) {
+  async function read(file, { leafId } = {}) {
     const opened = await openChecked(file);
     try {
       const entries = parseSessionEntries(await contentOf(opened)), header = validateEntries(entries);
@@ -203,6 +203,12 @@ export async function createSessionLibrary({ roots, piPackageDir, maxBytes = DEF
       // This placeholder exists only inside the non-persistent SDK instance. It is
       // never returned, serialized, created on disk, or used to launch a process.
       const manager = SessionManager.inMemory(cwd ?? '/__pi_unknown_session_workspace__', undefined, structuredClone(entries));
+      if (leafId === null) manager.resetLeaf();
+      else if (leafId !== undefined) {
+        if (typeof leafId !== 'string' || !leafId) throw new Error('Pi 分支位置需為有效的 entry id 或 null。');
+        try { manager.branch(leafId); }
+        catch { throw new Error('Pi 分支位置不在目前對話中，請重新整理後再試。'); }
+      }
       return { header, branch: manager.getBranch(), entries, cwd, revision: stamp(opened.stat) };
     } finally { await opened.handle.close(); }
   }

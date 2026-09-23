@@ -44,6 +44,28 @@ try {
     assert(result.branch.map(e => e.id).join(',') === 'root,new,answer,mode');
     assert(result.entries.some(e => e.id === 'old') && result.entries[0].type === 'session');
   });
+  await test('read 可依 CLI 記憶體 leaf 選擇分支或 root，不修改原生檔案', async () => {
+    const { root, library } = await fixture(), file = join(root, 'live-leaf.jsonl');
+    await write(file, [header('/workspace/live-leaf'), message('root', null, 'user', '最初問題'),
+      message('old', 'root', 'assistant', '先前回答'), message('new', 'root', 'user', '新分支'),
+      message('answer', 'new', 'assistant', '最新回答')]);
+    await library.scan();
+    const original = await fs.readFile(file), before = await fs.stat(file);
+    const old = await library.read(file, { leafId: 'old' });
+    const rootBranch = await library.read(file, { leafId: 'root' });
+    const empty = await library.read(file, { leafId: null });
+    const saved = await library.read(file);
+    assert(old.branch.map(entry => entry.id).join(',') === 'root,old');
+    assert(rootBranch.branch.map(entry => entry.id).join(',') === 'root');
+    assert(empty.branch.length === 0 && empty.entries.length === original.toString().trimEnd().split('\n').length);
+    assert(saved.branch.map(entry => entry.id).join(',') === 'root,new,answer');
+    assert(old.revision === empty.revision && empty.revision === saved.revision);
+    await rejects(() => library.read(file, { leafId: 'missing' }), '不在目前對話中');
+    await rejects(() => library.read(file, { leafId: '' }), '有效的 entry id');
+    await rejects(() => library.read(file, { leafId: 42 }), '有效的 entry id');
+    const after = await fs.stat(file);
+    assert((await fs.readFile(file)).equals(original) && before.mtimeMs === after.mtimeMs && before.size === after.size);
+  });
   await test('缺失、空白或不合法 cwd 的合法對話列為未分類，不冒充 home', async () => {
     const { root, library } = await fixture();
     const values = [undefined, '', 'relative/project', null, 42];
