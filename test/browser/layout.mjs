@@ -11,7 +11,11 @@ const state = { startedAt: 1, revision: 1, serverId: 'layout-fixture', workspace
   workspaces: [{ id: 'workspace', name: 'Workspace', path: '/fixture/workspace', available: true }],
   sessions: Array.from({ length: 50 }, (_, i) => ({ id: i ? `s-${i}` : 'session', workspaceId: 'workspace', title: `對話 ${i}`, createdAt: '2026-01-01', updatedAt: '2026-01-01', origin: 'web', kind: 'chat' })),
   messages: Array.from({ length: 50 }, (_, i) => ({ id: `m-${i}`, role: i % 2 ? 'assistant' : 'user', text: message, thinking: i % 2 ? '思考內容。'.repeat(30) : '', timestamp: 1 })),
-  sources: Array.from({ length: 100 }, (_, i) => ({ id: `source-${i}`, path: `sources/${i}.md`, title: '測試來源與版本資訊'.repeat(8), sha256: 'a'.repeat(64) })), tools: [], dialogs: [], commands: [], subagents: [], queue: { steering: [], followUp: [] }, transcript: { entries: [], usage: {} },
+  sources: Array.from({ length: 100 }, (_, i) => ({ id: `source-${i}`, path: `sources/${i}.md`, title: '測試來源與版本資訊'.repeat(8), sha256: 'a'.repeat(64) })), tools: [], dialogs: [],
+  commands: [{ name: 'wiki', description: '知識紀錄', suggestions: [{ value: '/wiki use ./llm-wiki', label: '掛載 Wiki' }] },
+    { name: 'mode', description: '切換模式', suggestions: [{ value: '/mode study', label: '學習模式' }] },
+    ...Array.from({ length: 20 }, (_, i) => ({ name: `fixture-${i}`, description: `測試指令 ${i}` }))],
+  subagents: [], queue: { steering: [], followUp: [] }, transcript: { entries: [], usage: {} },
 };
 const streams = new Set();
 const server = createServer(async (req, res) => {
@@ -49,6 +53,18 @@ try {
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       await page.goto(base); await page.locator('#messages .message').first().waitFor();
       await inspect(page, `${name} ${width}: initial`);
+      await page.locator('#open-commands').click();
+      await page.locator('#help-query').fill('掛載');
+      assert.equal(await page.locator('#help-results .help-option').count(), 1, `${name} ${width}: subcommands are searchable`);
+      const palette = await page.locator('#help-dialog').boundingBox();
+      assert(palette.x >= 0 && palette.y >= 0 && palette.x + palette.width <= width + 1 && palette.y + palette.height <= height + 1,
+        `${name} ${width}: command palette must fit the viewport ${JSON.stringify(palette)}`);
+      await page.locator('#close-help').click();
+      await page.locator('#prompt').fill('/mode st');
+      const menu = await page.locator('#command-menu').boundingBox();
+      assert(menu && menu.x >= 0 && menu.y >= 0 && menu.x + menu.width <= width + 1 && menu.y + menu.height <= height + 1,
+        `${name} ${width}: command suggestions must fit the viewport ${JSON.stringify(menu)}`);
+      await page.locator('#prompt').fill('');
       if (process.env.PI_LAYOUT_SCREENSHOTS && name === 'Chromium' && [1280, 390].includes(width) && height > 600 && reducedMotion === 'reduce') {
         await mkdir(process.env.PI_LAYOUT_SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: `${process.env.PI_LAYOUT_SCREENSHOTS}/${width}.png` });

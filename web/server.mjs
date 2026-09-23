@@ -128,6 +128,15 @@ export class ConversationView {
       const removed = this.messages.shift(); chars -= removed.text.length + (removed.thinking?.length || 0);
     }
   }
+  commandResult(name, result, error = false) {
+    if (!result) return;
+    const text = clip(`${clip(name, 100)}\n${result}`, 16000);
+    const id = randomUUID(), timestamp = Date.now();
+    this.messages.push({ id, role: 'assistant', streaming: false, text, timestamp, error: '' });
+    this.transcript.put(id, { kind: 'assistant', messageId: id, text, timestamp,
+      state: error ? 'error' : 'done', model: `Zen Pi ${clip(name, 100)}`, thinking: '', error: '', usage: null });
+    this.trimMessages();
+  }
   collectResult(content) { const value = parsed(content); if (value) this.collectSources(value); }
   collectSources(value, depth = 0) {
     if (!value || typeof value !== 'object' || depth > 8) return;
@@ -211,7 +220,7 @@ export async function createWebServer(options = {}) {
   // Each request and RPC event retains its own conversation across awaits.
   const contexts = new AsyncLocalStorage(), runtimes = new Map(), subagentAdmissions = new Map();
   const makeRuntime = id => ({ id, view: new ConversationView(imageStore), queuedImages: { steering: [], followUp: [] }, rpc: undefined, modelLabel: '', generation: 0,
-    stopping: false, runtimeCommands: undefined, loadedLocalRevision: undefined, thinkingLevel: null,
+    stopping: false, runtimeCommands: undefined, loadedLocalRevision: undefined, thinkingLevel: null, commandFeedback: null,
     nativeSessionId: null, epoch: 0, operation: null, queue: { steering: [], followUp: [] }, serial: Promise.resolve() });
   const emptyRuntime = makeRuntime(null);
   const selectedRuntime = () => runtimes.get(manifest.activeId) || emptyRuntime;
@@ -378,6 +387,8 @@ export async function createWebServer(options = {}) {
         if (view.streaming.error) view.error = view.streaming.error;
         view.streaming = null; view.trimMessages();
       } else view.message(msg);
+      if (msg?.role === 'custom' && msg.customType === 'pi-mode-error' && runtime().commandFeedback)
+        runtime().commandFeedback.error = view.error;
       changed();
     }
     if (['tool_execution_start', 'tool_execution_update', 'tool_execution_end'].includes(event.type)) {
@@ -393,7 +404,12 @@ export async function createWebServer(options = {}) {
       view.tools.set(event.toolCallId, { ...old, state: event.isError ? 'error' : 'done' });
       view.collectResult(event.result?.content); changed();
     }
-    if (event.type === 'extension_error') { view.error = safeError(event.error || 'Pi extension 執行失敗'); changed(); }
+    if (event.type === 'extension_error') {
+      view.error = safeError(event.error || 'Pi extension 執行失敗');
+      const feedback = runtime().commandFeedback;
+      if (feedback && event.event === 'command' && event.extensionPath === `command:${feedback.name}`) feedback.error = view.error;
+      changed();
+    }
     if (event.type === 'extension_ui_request') {
       if (['confirm', 'select', 'input', 'editor'].includes(event.method)) {
         const dialog = { id: clip(event.id, 200), method: event.method, title: clip(event.title, 2000), message: clip(event.message, 8000),
@@ -412,9 +428,21 @@ export async function createWebServer(options = {}) {
         const duplicateModeStatus = (!event.notifyType || event.notifyType === 'info') && view.modeState && value &&
           Object.keys(value).every(key => ['mode', 'question', 'topic'].includes(key)) &&
           value.mode === view.modeState.mode && (value.question ?? '') === view.modeState.question && (value.topic ?? '') === view.modeState.topic;
-        if (duplicateModeStatus) return;
-        if (event.notifyType === 'error') view.error = safeError(event.message);
-        else view.notice = clip(event.message, 2000);
+        const feedback = runtime().commandFeedback;
+        if (duplicateModeStatus) {
+          if (feedback) {
+            const label = { general: '一般模式', study: '學習模式', research: '研究模式' }[value.mode];
+            if (feedback.notices.length < 8) feedback.notices.push(`${label}${value.question ? `：${clip(value.question, 1000)}` : ''}${value.topic ? `（${clip(value.topic, 100)}）` : ''}`);
+          }
+          return;
+        }
+        if (event.notifyType === 'error') {
+          view.error = safeError(event.message);
+          if (feedback) feedback.error = view.error;
+        } else {
+          view.notice = clip(event.message, 2000);
+          if (feedback && feedback.notices.length < 8) feedback.notices.push(clip(event.message, 16000));
+        }
       } else if (event.method === 'setStatus' && event.statusKey === 'pentest-study') view.status = clip(event.statusText, 500);
       else if (event.method === 'set_editor_text') broadcast('editor', { text: clip(event.text, 32000) });
       changed();
@@ -795,6 +823,7 @@ export async function createWebServer(options = {}) {
   }
   async function webCommand(command) {
     const { name, args } = command;
+    if (args && ['help', 'session', 'clone', 'export', 'copy', 'agents'].includes(name)) throw fail(400, `/${name} 不接受參數。`);
     if (name === 'model') {
       const menu = await modelMenu();
       if (!args) return { ok: true, state: snapshot(), command: menu };
@@ -1025,15 +1054,33 @@ export async function createWebServer(options = {}) {
               if (!['help', 'session', 'new', 'side', 'agents', 'copy'].includes(command.name)) requireIdle();
               return webCommand(command);
             }
-            if (TERMINAL_COMMANDS.has(command.name)) throw fail(400, `/${command.name} 目前需要在 T14 的 Pi 終端使用。輸入 /help 可查看 Web 支援的指令。`);
-            if (!runtime().runtimeCommands?.some(item => item.name === command.name)) throw fail(400, '找不到這個指令，請輸入 /help 查看可用清單。這段內容未送給模型。');
+            if (!runtime().runtimeCommands?.some(item => item.name === command.name)) {
+              if (TERMINAL_COMMANDS.has(command.name)) throw fail(400, `/${command.name} 目前需要在 T14 的 Pi 終端使用。輸入 /help 可查看 Web 支援的指令。`);
+              throw fail(400, '找不到這個指令，請輸入 /help 查看可用清單。這段內容未送給模型。');
+            }
             // Pi splits the invocation at an ASCII space, not at arbitrary
             // whitespace. Keep our parser and its dispatcher in agreement.
             message = `/${command.name}${command.args ? ` ${command.args}` : ''}`;
           }
           requireIdle();
+          const owner = runtime(), feedback = command ? { name: command.name, notices: [], error: '' } : null;
+          owner.commandFeedback = feedback;
           view.error = ''; view.notice = ''; view.busy = true; changed();
-          try { await runtime().rpc.request('prompt', { message, ...(images.length ? { images } : {}) }, 10 * 60 * 1000); } catch (e) { view.busy = false; view.error = safeError(e); changed(); throw e; }
+          try {
+            await owner.rpc.request('prompt', { message, ...(images.length ? { images } : {}) }, 10 * 60 * 1000);
+            if (feedback?.error) throw fail(400, feedback.error);
+            if (feedback?.notices.length) {
+              view.commandResult(`/${command.name}`, feedback.notices.join('\n\n'));
+              view.notice = '';
+            }
+          } catch (e) {
+            view.busy = false; view.error = safeError(e);
+            if (feedback?.error) {
+              view.commandResult(`/${command.name}`, [...feedback.notices, feedback.error].join('\n\n'), true);
+              view.notice = '';
+            }
+            changed(); throw e;
+          } finally { if (owner.commandFeedback === feedback) owner.commandFeedback = null; }
           if (active().title === '新對話' && !manifest.sessionPreferences[active().id]?.title && !message.startsWith('/')) active().title = message.slice(0, 60);
           await rememberSession(); changed(); return { ok: true };
         }

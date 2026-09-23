@@ -41,7 +41,11 @@ export default function (pi, options = {}) {
         const page = await runtime.begin(target, match[2]);
         active(true);
         pi.sendMessage({ customType: 'browser-task', content: `${POLICY}\n\n任務：${match[2]}\n指定分頁：${page.tabId}\n目前網址：${page.url}`, display: false }, { triggerTurn: true });
-      } catch (error) { report(`瀏覽器：${error.message}`); }
+      } catch (error) {
+        const message = `瀏覽器：${error.message}`;
+        if (ctx.hasUI) ctx.ui.notify(message, 'error');
+        else report(message);
+      }
     },
   });
   pi.registerTool({

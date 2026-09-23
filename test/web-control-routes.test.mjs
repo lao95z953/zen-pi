@@ -187,7 +187,8 @@ try {
   assert.equal(await readFile(forbiddenPath, 'utf8'), 'leave intact', 'Client-supplied export paths cannot select the destination');
   await assert.rejects(access(dirname(destination.outputPath)), { code: 'ENOENT' });
   assert.equal(JSON.stringify(result).includes(destination.outputPath), false);
-  result = await slash(`/export ${forbiddenPath}`); assert.equal(result.command.html, exportHtml);
+  assert.match((await slash(`/export ${forbiddenPath}`, 400)).error, /不接受參數/);
+  result = await slash('/export'); assert.equal(result.command.html, exportHtml);
   assert.equal(await readFile(forbiddenPath, 'utf8'), 'leave intact');
   assert.deepEqual((await call('copy', { sessionId })).command, { type: 'copy', text: 'Saved answer' });
   assert.deepEqual((await slash('/copy')).command, { type: 'copy', text: 'Saved answer' });

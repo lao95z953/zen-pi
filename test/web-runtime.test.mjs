@@ -49,9 +49,10 @@ try {
   assert.ok(state.workspaces.some(workspace => workspace.path === root), 'Workspace paths are intentionally shown to their owner');
   assert.ok(!JSON.stringify(state).includes(join(root, 'data', 'sessions')), 'Internal session file paths remain private');
   assert.ok(state.sessions.every(session => !('file' in session)));
-  await call('prompt', { sessionId: id, message: '/test-feedback' });
+  assert.equal((await call('prompt', { sessionId: id, message: '/test-feedback' })).status, 400);
   state = (await call('state')).data;
-  assert.equal(state.notice, JSON.stringify({ warning: '需要保留的提醒' }), 'Unrelated JSON notifications remain visible');
+  assert.equal(state.notice, '', 'Command feedback is not duplicated in the transient notice');
+  assert.ok(state.messages.some(message => message.text.includes('需要保留的提醒')), 'Command feedback remains in the conversation');
   assert.equal(state.error, '筆記庫暫時無法讀取。', 'Actual errors remain visible');
   const study = await call('mode', { sessionId: id, mode: 'study' });
   assert.equal(study.status, 200); assert.equal(study.data.mode, 'study');

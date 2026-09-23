@@ -103,14 +103,15 @@ test('Queue normalization preserves exact drafts, order and intentional duplicat
   assert.deepEqual(normalizeQueue({ steering: 'not an array', followUp: { text: secret } }), { steering: [], followUp: [] });
 });
 
-test('New Web controls are registered while unsupported terminal commands remain blocked', () => {
+test('Web controls are listed, and terminal names appear only when Pi registers them', () => {
   const names = WEB_COMMANDS.map(command => command.name);
   for (const name of ['thinking', 'compact', 'fork', 'clone', 'export', 'copy', 'agents', 'side']) {
     assert.ok(names.includes(name)); assert.equal(TERMINAL_COMMANDS.has(name), false);
   }
   for (const name of ['login', 'logout', 'settings', 'resume', 'reload', 'tree']) {
     assert.equal(TERMINAL_COMMANDS.has(name), true);
-    assert.equal(safeCommands([{ name, source: 'extension' }]).length, 0, 'A registered-looking row cannot bypass terminal-only handling');
+    assert.equal(commandCatalog([]).some(command => command.name === name), false, 'A terminal command is not invented by the Web catalog');
+    assert.equal(safeCommands([{ name, source: 'extension' }])[0].name, name, 'An actual Pi registration can use the same name');
   }
   assert.equal(new Set(names).size, names.length);
   assert.equal(commandCatalog([]).some(command => command.name === 'wiki'), false, 'Metadata does not fabricate an unregistered command');
