@@ -6,6 +6,16 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createWebServer } from '../web/server.mjs';
+import { commandCatalog } from '../web/commands.mjs';
+
+const projectedHints = commandCatalog([{ name: 'fixture', source: 'extension', suggestions: [
+  { value: '/fixture safe', label: '安全候選', argumentHint: '接著輸入值' },
+  { value: '/fixture bad', label: '錯誤候選', argumentHint: '一行\n另一行' },
+  { value: '/fixture bad-unicode', label: '錯誤候選', argumentHint: '一行\u2028另一行' },
+] }]).find(item => item.name === 'fixture').suggestions;
+assert.equal(projectedHints[0].argumentHint, '接著輸入值');
+assert.equal(projectedHints[1].argumentHint, undefined, 'Untrusted command hints cannot inject a second line');
+assert.equal(projectedHints[2].argumentHint, undefined, 'Unicode line separators are rejected too');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = await mkdtemp(join(tmpdir(), 'pi-web-commands-'));
@@ -44,7 +54,7 @@ function assertCommandList(commands) {
   assert.ok(Array.isArray(commands));
   for (const item of commands) {
     assert.ok(typeof item.name === 'string' && item.name);
-    assert.ok(Object.keys(item).every(key => ['name', 'description', 'source', 'usage', 'suggestions'].includes(key)), 'Command lists expose only their public fields');
+    assert.ok(Object.keys(item).every(key => ['name', 'description', 'source', 'usage', 'suggestions', 'argumentHint'].includes(key)), 'Command lists expose only their public fields');
   }
   for (const name of ['model', 'help', 'new', 'name', 'session', 'mode', 'study', 'browser']) assert.ok(commands.some(item => item.name === name), `Command list includes /${name}`);
 }
@@ -76,6 +86,10 @@ try {
   let state = await call('sessions', {}), sessionId = state.sessionId;
   const workspaceId = state.workspaceId;
   assert.equal(state.mode, 'general'); assertCommandList(state.commands);
+  for (const name of ['study-status', 'study-notes']) assert.ok(!state.commands.some(item => item.name === name), `Internal /${name} is not offered as a user command`);
+  assert.equal(state.commands.find(item => item.name === 'name')?.usage, '/name <新名稱>');
+  assert.equal(state.commands.find(item => item.name === 'research')?.suggestions.find(item => item.value === '/research resume')?.argumentHint, '接著輸入研究 topic');
+  assert.equal(state.commands.find(item => item.name === 'wiki')?.suggestions.find(item => item.value === '/wiki forget')?.argumentHint, '接著輸入紀錄 ID');
   assert.deepEqual(state.messages, []);
 
   let response = await command(sessionId, '/model');
@@ -95,6 +109,10 @@ try {
   for (const message of ['/login', '/settings', '/reload', '/unknown-command', '/skill:missing-skill']) {
     const rejected = await command(sessionId, message, 400);
     assert.ok(rejected.error, `${message} returns an explicit error rather than becoming a model prompt`);
+  }
+  for (const message of ['/study-status', '/study-notes']) await command(sessionId, message, 400);
+  for (const message of ['/help extra', '/session extra', '/clone extra', '/export extra', '/copy extra', '/agents extra', '/new extra']) {
+    assert.match((await command(sessionId, message, 400)).error, /參數|不需要參數/, `${message} must reject ignored arguments`);
   }
   assert.equal((await command(sessionId, '/compact')).command.type, 'compact', 'Compaction first opens a reviewable confirmation without calling a model');
   assert.deepEqual((await command(sessionId, '/thinking')).command.levels, ['off'], 'The real Pi controls report only the selected model’s supported levels');
@@ -175,11 +193,38 @@ try {
   assert.equal(modelCalls, 0, 'All real-Pi command and draft operations use zero model requests');
   assert.equal(await readFile(join(vault, 'Synthetic.md'), 'utf8'), '# Synthetic\nOnly a temporary test note.\n');
   const browserSession = state.sessionId;
+  for (const name of ['browser', 'wiki', 'study', 'mode']) {
+    assert.equal(state.commands.find(item => item.name === name)?.source, 'extension', `/${name} is registered in the real Pi command catalog`);
+    assert.ok((await command(browserSession, '/help')).command.commands.some(item => item.name === name), `/${name} appears in Web help`);
+  }
   await command(browserSession, '/browser status');
   state = await call('state');
   const browserStatus = state.transcript.entries.find(entry => entry.model === 'Zen Pi / Browser');
   assert.equal(JSON.parse(browserStatus.text).active, false, 'Browser status is visible in the Web conversation');
   assert.equal(state.transcript.usage.requests, 0);
+  await command(browserSession, '/study status');
+  state = await call('state');
+  assert.ok(state.messages.some(message => message.text.startsWith('/study\n') && message.text.includes('一般模式')),
+    '/study status dispatches to its extension and leaves a readable result');
+  response = await command(browserSession, '/wiki list');
+  assert.equal(response.ok, true);
+  state = await call('state');
+  assert.equal(state.notice, '', 'A command result is not repeated in the transient notice banner');
+  const wikiResult = state.messages.find(message => message.text.includes('目前掛載：'));
+  assert.ok(wikiResult, 'Extension notifications remain in the conversation after the command finishes');
+  assert.ok(state.transcript.entries.some(entry => entry.model === 'Zen Pi /wiki' && entry.text.includes('目前掛載：')));
+  await command(browserSession, '/mode status');
+  state = await call('state');
+  assert.ok(state.messages.some(message => message.id === wikiResult.id), 'The next command does not erase the previous result');
+  assert.ok(state.messages.some(message => message.text === '/mode\n一般模式'), 'Status is readable without raw mode JSON');
+  const rejectedWiki = await command(browserSession, '/wiki unknown', 400);
+  assert.match(rejectedWiki.error, /用法：\/wiki/);
+  state = await call('state');
+  assert.match(state.error, /用法：\/wiki/);
+  assert.ok(state.transcript.entries.some(entry => entry.model === 'Zen Pi /wiki' && entry.state === 'error'));
+  const rejectedMode = await command(browserSession, '/mode unavailable', 400);
+  assert.match(rejectedMode.error, /用法：\/mode/);
+  assert.equal((await call('state')).mode, 'general', 'A rejected extension command keeps the current mode');
   assert.equal(modelCalls, 0);
   await close();
   console.log('Real Pi Web commands: model selection, help, Session info/name/new, extension dispatch and draft persistence pass with 0 model requests');
@@ -202,7 +247,7 @@ let model = models[0], mode = 'general';
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const reply = (request, data) => emit({ type: 'response', id: request.id, command: request.type, success: true, data });
 const custom = (customType, value) => emit({ type: 'message_end', message: { role: 'custom', customType, content: JSON.stringify(value) } });
-const commands = ['mode', 'study', 'study-status', 'study-notes', 'browser', 'fixture-extension'].map(name => ({ name, description: 'Fixture extension', source: 'extension' }));
+const commands = ['mode', 'study', 'study-status', 'study-notes', 'browser', 'fixture-extension', 'settings'].map(name => ({ name, description: 'Fixture extension', source: 'extension' }));
 commands.push({ name: 'fixture-template', description: 'Fixture template', source: 'prompt' }, { name: 'skill:fixture-skill', description: 'Fixture skill', source: 'skill' });
 for (const command of commands) Object.assign(command, { path: '/PRIVATE_COMMAND_SOURCE_SENTINEL', sourceInfo: { path: '/PRIVATE_COMMAND_SOURCE_SENTINEL', origin: 'temporary' } });
 for await (const line of createInterface({ input: process.stdin })) {
@@ -216,6 +261,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   else if (request.type === 'prompt') {
     if (request.message.startsWith('/mode ')) { if (request.message !== '/mode status') mode = request.message.slice(6); custom('pi-mode-state', { mode }); }
     else if (request.message === '/study-status') custom('pi-study-state', { mode, focus: { mode: 'auto' }, status: 'Fixture', current: null });
+    else if (request.message === '/fixture-extension throw') emit({ type: 'extension_error', extensionPath: 'command:fixture-extension', event: 'command', error: 'Synthetic command failure' });
     reply(request);
   } else reply(request);
 }
@@ -223,7 +269,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   await launch({ dataDir: join(root, 'fake-data'), piBin: process.execPath, piArgs: [rpcFile], env: { ...options.env, COMMAND_RPC_AUDIT: auditFile } });
   state = await call('sessions', {}); sessionId = state.sessionId;
   assertCommandList(state.commands);
-  for (const [name, source] of [['fixture-extension', 'extension'], ['fixture-template', 'prompt'], ['skill:fixture-skill', 'skill']]) {
+  for (const [name, source] of [['fixture-extension', 'extension'], ['settings', 'extension'], ['fixture-template', 'prompt'], ['skill:fixture-skill', 'skill']]) {
     assert.equal(state.commands.find(command => command.name === name)?.source, source);
   }
   picker = assertModels(await command(sessionId, '/model'), sessionId);
@@ -235,19 +281,22 @@ for await (const line of createInterface({ input: process.stdin })) {
   assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'sentinel-b', id: 'shared' });
   await command(sessionId, '/model unique');
   assert.deepEqual(assertModels(await command(sessionId, '/model'), sessionId).current, { provider: 'sentinel-b', id: 'unique' });
-  for (const message of ['/login', '/settings', '/reload', '/made-up-command', '/skill:not-installed']) await command(sessionId, message, 400);
-  for (const message of ['/fixture-extension', '/fixture-template', '/skill:fixture-skill']) await command(sessionId, message);
+  for (const message of ['/login', '/reload', '/made-up-command', '/skill:not-installed']) await command(sessionId, message, 400);
+  for (const message of ['/fixture-extension', '/settings', '/fixture-template', '/skill:fixture-skill']) await command(sessionId, message);
+  assert.match((await command(sessionId, '/fixture-extension throw', 400)).error, /Synthetic command failure/);
   for (const message of ['/mode\tstudy', '/mode\nresearch']) await command(sessionId, message);
   response = await command(sessionId, '/session');
   assert.equal(response.command.info.messageCount, 753, 'Session info counts native user and assistant messages, including history outside the Web display limit');
-  assert.deepEqual(response.state.messages, [], 'The statistics fixture intentionally has no messages in its current Web view');
+  assert.deepEqual(response.state.messages.map(message => message.text), ['/fixture-extension\nSynthetic command failure'],
+    'A thrown extension command stays visible without creating a model message');
+  assert.equal(response.state.transcript.usage.requests, 0);
   response = await command(sessionId, '/help'); assertCommandList(response.command.commands);
   const audit = (await readFile(auditFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   const forwarded = audit.filter(request => request.type === 'prompt').map(request => request.message);
-  for (const message of ['/login', '/settings', '/reload', '/made-up-command', '/skill:not-installed', '/model', '/model shared', '/model sentinel-b/shared', '/model unique', '/help']) {
+  for (const message of ['/login', '/reload', '/made-up-command', '/skill:not-installed', '/model', '/model shared', '/model sentinel-b/shared', '/model unique', '/help']) {
     assert.ok(!forwarded.includes(message), `${message} must be handled before RPC prompt dispatch`);
   }
-  for (const message of ['/fixture-extension', '/fixture-template', '/skill:fixture-skill']) assert.ok(forwarded.includes(message), 'Registered extension, prompt and skill commands are dispatched');
+  for (const message of ['/fixture-extension', '/settings', '/fixture-template', '/skill:fixture-skill']) assert.ok(forwarded.includes(message), 'Registered extension, prompt and skill commands are dispatched');
   for (const message of ['/mode study', '/mode research']) assert.ok(forwarded.includes(message), 'Registered commands are forwarded with a single ASCII space before their arguments');
   for (const message of ['/mode\tstudy', '/mode\nresearch']) assert.ok(!forwarded.includes(message), 'Raw tab/newline separators never reach Pi slash dispatch');
   assertPublic(await call('state'));

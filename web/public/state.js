@@ -161,13 +161,16 @@ export function libraryScanWarning(count) {
 }
 
 const searchText = value => String(value || '').normalize('NFKC').toLocaleLowerCase('zh-TW');
+const matchesTerms = (value, query) => searchText(query).trim().split(/\s+/).filter(Boolean).every(term => searchText(value).includes(term));
+const commandText = command => `${command.name} ${command.description || ''} ${command.usage || ''} ${(command.suggestions || [])
+  .map(option => `${option.value || ''} ${option.label || ''} ${option.description || ''}`).join(' ')}`;
 
 export function commandSuggestions(commands, input) {
   const match = /^\/([^\s]*)$/.exec(input);
   if (!match) return [];
   const query = searchText(match[1]);
   return (commands || []).filter(command => command.name &&
-    (searchText(command.name).includes(query) || searchText(command.description).includes(query)))
+    matchesTerms(commandText(command), query))
     .sort((a, b) => Number(searchText(b.name).startsWith(query)) - Number(searchText(a.name).startsWith(query)));
 }
 
@@ -175,14 +178,49 @@ export function composerSuggestions(commands, input) {
   const match = /^\/([^\s]+)\s+([^\n]*)$/.exec(input);
   if (!match) return commandSuggestions(commands, input).map(command => ({ ...command, value: `/${command.name}`, label: `/${command.name}` }));
   const command = (commands || []).find(command => command.name === match[1]);
-  const query = searchText(input.trim());
+  const query = match[2].trim();
   return (command?.suggestions || []).filter(option => typeof option.value === 'string' &&
-    searchText(option.value).startsWith(query)).map(option => ({ ...option, name: option.value, label: option.label || option.value }));
+    searchText(option.value) !== searchText(input.trim()) &&
+    matchesTerms(`${option.value} ${option.label || ''} ${option.description || ''}`, query))
+    .map(option => ({ ...option, name: option.value, label: option.label || option.value }));
+}
+
+/** The palette searches command names, descriptions, usage and available subcommands. */
+export function commandPaletteOptions(commands, query = '') {
+  const terms = searchText(query).trim().replace(/^\//, '');
+  const entries = [];
+  for (const command of commands || []) {
+    if (!command?.name) continue;
+    if (!terms || matchesTerms(`${command.name} ${command.description || ''} ${command.usage || ''}`, terms))
+      entries.push({ ...command, value: `/${command.name}`, label: `/${command.name}`, kind: 'command' });
+    if (terms) for (const option of command.suggestions || []) {
+      if (typeof option.value !== 'string' || !matchesTerms(`${command.name} ${option.value} ${option.label || ''} ${option.description || ''}`, terms)) continue;
+      entries.push({ ...option, value: option.value, label: option.label || option.value, description: option.description || command.description || '',
+        parent: command.name, kind: 'suggestion' });
+    }
+  }
+  if (terms) {
+    const rank = option => {
+      const value = searchText(option.value).replace(/^\//, '');
+      return value === terms ? 2 : value.startsWith(terms) ? 1 : 0;
+    };
+    entries.sort((a, b) => rank(b) - rank(a));
+  }
+  return entries;
 }
 
 export function commandUsage(commands, input) {
   const name = /^\/([^\s]+)(?:\s|$)/.exec(input)?.[1];
   return (commands || []).find(command => command.name === name)?.usage || '';
+}
+
+export function commandArgumentHint(commands, input) {
+  const name = /^\/([^\s]+)(?:\s|$)/.exec(input)?.[1];
+  const command = (commands || []).find(item => item.name === name);
+  const value = input.trim();
+  if (!command || !value) return '';
+  if (value === `/${name}`) return command.argumentHint || '';
+  return command.suggestions?.find(option => option.value === value)?.argumentHint || '';
 }
 
 export function moveCommandSelection(index, step, count) {

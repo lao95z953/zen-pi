@@ -1,7 +1,7 @@
 import { markdown } from './markdown.js';
 import { renderMermaidBlocks } from './mermaid-view.js';
 import { renderMathBlocks } from './math-view.js';
-import { isCurrent, selectedWorkspace, workspaceSessions, workspaceControls, draftScope, acceptsCreatedSession, mergeRestoredDraft, libraryScanWarning, composerSuggestions, commandUsage, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, agentControls, sessionInfoRows, workspaceJobs, jobDraft, metric, sessionParent, workspaceSessionRows, workspaceDeletedSessions, sessionManagementReason } from './state.js';
+import { isCurrent, selectedWorkspace, workspaceSessions, workspaceControls, draftScope, acceptsCreatedSession, mergeRestoredDraft, libraryScanWarning, composerSuggestions, commandPaletteOptions, commandUsage, commandArgumentHint, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, agentControls, sessionInfoRows, workspaceJobs, jobDraft, metric, sessionParent, workspaceSessionRows, workspaceDeletedSessions, sessionManagementReason } from './state.js';
 const $ = id => document.getElementById(id);
 const labels = { general: '一般', study: '學習', research: '研究' };
 const hints = { general: '一般 · 自由討論', study: '學習 · 從筆記釐清概念', research: '研究 · 查證來源與推進問題' };
@@ -14,6 +14,7 @@ const toolLabels = { study_read: '閱讀筆記', study_search: '搜尋筆記', s
 let state = { messages: [], sources: [], sessions: [], workspaces: [], workspaceId: null, tools: [], dialogs: [], commands: [], mode: 'general', busy: false, sessionId: null, online: false, readOnly: false, canContinue: false };
 let connected = false, working = false, stopPending = false, shownDialog = null, draftKey = '', renderQueued = false, noteSearchRevision = 0;
 let commandOptions = [], commandIndex = 0, commandDismissed = false, modelRequest = null;
+let helpCommands = [], helpOptions = [], helpIndex = 0, helpFromState = false, helpRenderedSignature = '', dismissedNotice = null, dismissedError = null;
 let queuePending = false, agentPending = false, controlRequest = null, agentRequest = null, panelView = 'sources', exportURL = null;
 const imageDrafts = new Map(), imageUploads = new Map(), imageAliases = new Map();
 const promptPending = new Set(), compactPending = new Set(), compactResults = new Map(), jobNodes = new Map();
@@ -29,7 +30,17 @@ let following = true, scrollRevision = 0, lastScrollTop = 0, touchY = null;
 const traceNodes = new Map();
 let traceScope = '', mainView = 'chat', chatTop = 0, transcriptTop = 0, usageRequest = null;
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
-function setError(text) { $('error').textContent = text || ''; $('error').hidden = !text; }
+function setError(text) {
+  if (!text) dismissedError = null;
+  $('error-text').textContent = text || '';
+  $('error').hidden = !text || dismissedError === text;
+}
+function renderNotice() {
+  const key = state.notice ? `${state.sessionId || ''}\0${state.notice}` : null;
+  if (!key) dismissedNotice = null;
+  $('notice-text').textContent = state.notice || '';
+  $('notice').hidden = !key || dismissedNotice === key;
+}
 async function api(path, body) {
   if (body !== undefined) body = { sessionId: state.sessionId, workspaceId: state.workspaceId, ...body };
   const response = await fetch(`/api/${path}`, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-Pi-Web': '1' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -59,6 +70,7 @@ function controls() {
   for (const id of ['model-action-hint', 'model-dialog-hint']) { $(id).textContent = modelReason; $(id).hidden = !modelReason; }
   document.querySelectorAll('#model-results button').forEach(button => { button.disabled = !!modelReason; });
   $('prompt').disabled = !can.input; $('add-image').disabled = !can.input;
+  $('open-commands').disabled = !(state.commands || []).length;
   $('workspace-select').disabled = !can.browse || !(state.workspaces || []).length;
   $('add-workspace').disabled = !can.browse; $('save-workspace').disabled = !can.browse;
   $('refresh-sessions').disabled = !can.browse;
@@ -359,9 +371,13 @@ function apply(next) {
   $('choose-note').hidden = state.mode !== 'study';
   const current = state.context?.current;
   $('note-label').textContent = current ? current.split('/').at(-1).replace(/\.md$/, '') : '選擇筆記';
-  $('notice').textContent = state.notice || ''; $('notice').hidden = !state.notice;
+  renderNotice();
   setError(state.error);
   renderWorkspaces(); renderSessions(); renderRecycle(); renderReadOnly(); renderConversation(); renderSources(); renderActivity(); renderTranscript(); renderQuestion(); renderCommands(); renderQueue(); renderJobs(); controls();
+  if ($('help-dialog').open) {
+    if (helpFromState) helpCommands = state.commands || [];
+    if (commandPaletteSignature() !== helpRenderedSignature) renderCommandPalette();
+  }
   scrollDown();
   return true;
 }
@@ -585,6 +601,8 @@ function renderCommands() {
   const previousName = commandOptions[commandIndex]?.name;
   commandOptions = composerSuggestions(state.commands, $('prompt').value);
   commandIndex = Math.max(0, commandOptions.findIndex(command => command.name === previousName));
+  const currentName = /^\/([^\s]+)/.exec($('prompt').value)?.[1];
+  const recognized = (state.commands || []).some(command => command.name === currentName);
   const list = $('command-options'); list.replaceChildren();
   commandOptions.forEach((command, index) => {
     const button = el('button', 'command-option'); button.type = 'button'; button.id = `command-option-${index}`;
@@ -594,8 +612,11 @@ function renderCommands() {
     button.onclick = () => insertCommand(command.value);
     list.append(button);
   });
-  $('command-menu').hidden = false; $('command-empty').hidden = !!commandOptions.length;
-  const usage = commandUsage(state.commands, $('prompt').value); $('command-usage').textContent = usage; $('command-usage').hidden = !usage;
+  $('command-menu').hidden = false; $('command-empty').hidden = !!commandOptions.length || recognized;
+  const hint = commandArgumentHint(state.commands, $('prompt').value);
+  $('command-menu-hint').textContent = hint ? '請先填入參數' : commandOptions.length ? '選擇後再送出' : recognized ? '可繼續輸入或送出' : '搜尋名稱或用途';
+  const usage = [commandUsage(state.commands, $('prompt').value), hint].filter(Boolean).join(' · ');
+  $('command-usage').textContent = usage; $('command-usage').hidden = !usage;
   $('prompt').setAttribute('aria-expanded', 'true'); updateCommandSelection();
 }
 function updateCommandSelection() {
@@ -607,8 +628,47 @@ function insertCommand(name) {
   if (state.readOnly) return;
   const value = name.startsWith('/') ? name : `/${name}`;
   $('prompt').value = `${value} `;
-  commandDismissed = !(state.commands || []).some(command => `/${command.name}` === value && command.suggestions?.length);
+  const root = (state.commands || []).find(command => `/${command.name}` === value);
+  commandDismissed = !root?.suggestions?.length && !commandArgumentHint(state.commands, value);
   closeCommands(); $('prompt').focus(); resizeInput(); saveDraft(); renderCommands();
+}
+function commandPaletteSignature() {
+  return JSON.stringify([helpCommands, state.readOnly, $('prompt').value.trim(), $('help-query').value]);
+}
+function renderCommandPalette() {
+  const query = $('help-query').value;
+  helpOptions = commandPaletteOptions(helpCommands, query);
+  helpIndex = Math.min(helpIndex, Math.max(0, helpOptions.length - 1));
+  const draft = $('prompt').value.trim();
+  const blockedDraft = !!draft && !/^\/[^\s]*$/.test(draft);
+  $('help-draft-hint').hidden = !blockedDraft;
+  const list = $('help-results'); list.replaceChildren();
+  for (const [index, option] of helpOptions.entries()) {
+    const button = el('button', 'help-option'); button.id = `help-option-${index}`; button.type = 'button';
+    button.setAttribute('role', 'option'); button.disabled = state.readOnly || blockedDraft;
+    button.append(el('strong', '', option.label), el('small', 'help-command', option.kind === 'suggestion' ? option.value : option.usage || option.description || ''));
+    if (option.kind === 'suggestion' && option.description) button.append(el('small', '', option.description));
+    button.onclick = () => selectPaletteOption(option); list.append(button);
+  }
+  if (!helpOptions.length) list.append(el('p', 'choice-empty', '找不到符合的指令，試試用途或另一個名稱。'));
+  updateHelpSelection();
+  helpRenderedSignature = commandPaletteSignature();
+}
+function updateHelpSelection() {
+  $('help-results').querySelectorAll('.help-option').forEach((button, index) => button.setAttribute('aria-selected', String(index === helpIndex)));
+  if (helpOptions.length) $('help-query').setAttribute('aria-activedescendant', `help-option-${helpIndex}`);
+  else $('help-query').removeAttribute('aria-activedescendant');
+}
+function selectPaletteOption(option) {
+  if (state.readOnly || $('help-draft-hint').hidden === false) return;
+  $('help-dialog').close(); insertCommand(option.value);
+}
+function openCommandPalette(commands) {
+  helpFromState = commands === undefined;
+  helpCommands = commands || state.commands || []; helpIndex = 0; $('help-query').value = '';
+  renderCommandPalette();
+  if (!$('help-dialog').open) $('help-dialog').showModal();
+  $('help-query').focus();
 }
 function renderModels() {
   const list = $('model-results'); list.replaceChildren();
@@ -637,14 +697,7 @@ function showCommandResponse(response, requested) {
     $('model-query').value = ''; $('model-error').hidden = true; renderModels();
     $('model-dialog').showModal(); $('model-query').focus();
   } else if (command.type === 'help') {
-    const list = $('help-results'); list.replaceChildren();
-    for (const entry of command.commands || []) {
-      const button = el('button', 'help-option'); button.type = 'button';
-      button.append(el('strong', '', `/${entry.name}`), el('small', '', entry.description || ''));
-      button.onclick = () => { $('help-dialog').close(); insertCommand(entry.name); }; list.append(button);
-    }
-    if (!list.childElementCount) list.append(el('p', 'choice-empty', '目前沒有可用指令。'));
-    $('help-dialog').showModal();
+    openCommandPalette(command.commands);
   } else if (command.type === 'session') {
     const list = $('session-info'); list.replaceChildren();
     for (const [label, value] of sessionInfoRows(command.info)) {
@@ -686,6 +739,26 @@ $('choose-model').onclick = () => {
 $('model-query').oninput = renderModels;
 $('close-models').onclick = () => $('model-dialog').close();
 $('close-help').onclick = () => $('help-dialog').close();
+$('open-commands').onclick = () => openCommandPalette();
+$('help-query').oninput = () => { helpIndex = 0; renderCommandPalette(); };
+$('help-query').onkeydown = event => {
+  if (event.isComposing) return;
+  if (event.key === 'Escape') { event.preventDefault(); $('help-dialog').close(); $('prompt').focus(); return; }
+  const columns = viewportWidth() >= 768 ? 2 : 1;
+  if (helpOptions.length && (['ArrowDown', 'ArrowUp'].includes(event.key) || columns === 2 && ['ArrowLeft', 'ArrowRight'].includes(event.key))) {
+    const step = event.key === 'ArrowDown' ? columns : event.key === 'ArrowUp' ? -columns : event.key === 'ArrowRight' ? 1 : -1;
+    event.preventDefault(); helpIndex = moveCommandSelection(helpIndex, step, helpOptions.length);
+    updateHelpSelection(); $(`help-option-${helpIndex}`).scrollIntoView({ block: 'nearest' }); return;
+  }
+  if (event.key === 'Enter' && helpOptions.length) { event.preventDefault(); selectPaletteOption(helpOptions[helpIndex]); }
+};
+$('close-notice').onclick = () => {
+  if (!state.notice) return;
+  dismissedNotice = `${state.sessionId || ''}\0${state.notice}`; $('notice').hidden = true;
+};
+$('close-error').onclick = () => {
+  dismissedError = $('error-text').textContent; $('error').hidden = true;
+};
 $('close-session-info').onclick = () => $('session-dialog').close();
 $('open-sidebar').onclick = () => drawer('sidebar', !visibleLayout().left);
 $('toggle-right-panel').onclick = () => drawer('sources-panel', !visibleLayout().right);
@@ -749,13 +822,22 @@ $('prompt').onkeydown = event => {
       event.preventDefault(); commandIndex = moveCommandSelection(commandIndex, event.key === 'ArrowDown' ? 1 : -1, commandOptions.length);
       updateCommandSelection(); $(`command-option-${commandIndex}`).scrollIntoView({ block: 'nearest' }); return;
     }
-    if (commandOptions.length && !event.shiftKey && ['Tab', 'Enter'].includes(event.key)) { event.preventDefault(); insertCommand(commandOptions[commandIndex].value); return; }
+    if (commandOptions.length && !event.shiftKey && ['Tab', 'Enter'].includes(event.key)) {
+      const selected = commandOptions[commandIndex];
+      if (event.key === 'Tab' || selected.value !== $('prompt').value.trim()) {
+        event.preventDefault(); insertCommand(selected.value); return;
+      }
+    }
   }
-  if (event.key === 'Enter' && !event.shiftKey && innerWidth >= 768) { event.preventDefault(); if (state.busy) enqueue('follow_up'); else $('composer').requestSubmit(); }
+  if (event.key === 'Enter' && !event.shiftKey && (innerWidth >= 768 || !$('command-menu').hidden && $('prompt').value.startsWith('/'))) {
+    event.preventDefault(); if (state.busy) enqueue('follow_up'); else $('composer').requestSubmit();
+  }
 };
 $('composer').onsubmit = async event => {
   event.preventDefault(); if (!workspaceControls(state, { connected, working }).send || promptPending.has(draftScope(state))) return;
   const message = $('prompt').value.trim(), images = [...draftImages()]; if ((!message && !images.length) || message.length > 32000 || uploadingImages() || imageLimitExceeded()) return;
+  const missingArgument = commandArgumentHint(state.commands, message);
+  if (missingArgument) { setError(missingArgument); return; }
   if (images.length && message.startsWith('/')) { setError('圖片請搭配一般訊息送出；Slash 指令不會接收圖片。'); return; }
   const workspaceId = state.workspaceId; let sessionId = state.sessionId, restoreScope = draftScope(state);
   const initialScope = restoreScope; promptPending.add(initialScope); writeImages(initialScope, []);

@@ -89,6 +89,12 @@ await assert.rejects(tools.browser.execute('id', { op: 'observe' }), /使用者/
 await events.session_shutdown();
 await commands.browser.handler('4 Search', { isIdle: () => true });
 await events.session_start(); assert(!runtime.status().active); assert(!active.includes('browser'));
+const oldTabs = runtime.tabs, browserNotices = [], messageCount = messages.length;
+runtime.tabs = async () => { throw new Error('配對失敗'); };
+await commands.browser.handler('tabs', { hasUI: true, ui: { notify: (text, type) => browserNotices.push({ text, type }) }, isIdle: () => true });
+assert.deepEqual(browserNotices, [{ text: '瀏覽器：配對失敗', type: 'error' }]);
+assert.equal(messages.length, messageCount, 'Browser command errors do not also appear as successful status messages');
+runtime.tabs = oldTabs;
 
 const proposalCalls = [], clickPage = { ...page, actions: [{ id: '1:click', kind: 'click', label: 'Next' }] };
 const advisory = new BrowserRuntime({ connect: async () => config, worker, call: async (_c, body) => {

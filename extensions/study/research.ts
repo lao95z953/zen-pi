@@ -139,6 +139,7 @@ export function registerResearch(pi: ExtensionAPI, vault: () => WikiStorage, ass
         if (!ctx.isIdle()) throw new Error("請等本輪完成或先停止，再切換研究模式。");
         if (arg === "off") { change({ mode: "general" }, ctx); return; }
         if (!arg) { change(state.mode === "research" ? state : { mode: "research" }, ctx); if (ctx.hasUI) ctx.ui.notify("已進入研究模式。請提出研究問題；/research off 回一般。", "info"); return; }
+        if (arg === "resume") throw new Error("用法：/research resume <topic>。請填入要接續的研究 topic。");
         if (arg.startsWith("resume ")) {
           const topic = arg.slice(7).trim();
           const heads = visibleRecords(records(vault())).filter(r => r.kind === "research" && r.topic === topic);

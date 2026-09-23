@@ -52,7 +52,9 @@ tailscale serve --bg --yes http://127.0.0.1:4318
 
 ## 指令與 Sub Agent
 
-輸入 `/` 可搜尋指令。常用項目有 `/model`、`/thinking`、`/new`、`/name`、`/session`、`/compact`、`/fork`、`/clone`、`/side`、`/export` 和 `/agents`。Study／Research 指令由 extension 提供。`/help` 顯示目前可用指令；`/login`、`/settings`、`/reload` 仍需在 Pi 終端使用。
+輸入 `/` 可叫出補全，或按輸入框下方的「/ 指令」開啟搜尋面板；可用名稱、用途及子指令搜尋，不必記住英文指令。Tab 填入目前選項；Enter 會補全未完成的名稱，指令完整時送出。面板會顯示使用方式；已有一般訊息草稿時仍可搜尋，但須先送出或清空草稿才能填入指令。常用項目有 `/model`、`/thinking`、`/new`、`/name`、`/session`、`/compact`、`/fork`、`/clone`、`/side`、`/export` 和 `/agents`。Study／Research 指令由 extension 提供。`/help` 也會開啟搜尋面板；`/login`、`/settings`、`/reload` 等終端專用指令仍需在 Pi 終端使用。
+
+指令的簡短提示可用右側 × 收起。Extension 回傳的指令結果會顯示在對話及 Transcript，直到 Web 服務重啟；執行失敗會保留原本的輸入草稿。
 
 Sub Agent 有獨立 Pi Session，可執行閱讀分析或在 Git worktree 修改程式。主 Agent 與 Web 面板都能建立任務；子任務結果需檢查後再整合。詳見 [Sub Agent](subagents.md)。
 

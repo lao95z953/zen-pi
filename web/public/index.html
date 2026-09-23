@@ -52,8 +52,8 @@
     <div id="parent-navigation" class="parent-navigation" hidden><span id="parent-caption">Side Chat</span><button id="return-parent" type="button">← 返回主對話</button></div>
     </section>
     <section class="readonly-banner" id="readonly-banner" aria-label="本機對話紀錄" hidden><div><strong>本機對話紀錄</strong><p id="readonly-copy">接續會建立新的 Web 對話，保留原本紀錄。</p></div><button id="continue-session" type="button">接續對話 <span aria-hidden="true">↗</span></button></section>
-    <div class="notice" id="notice" role="status" hidden></div>
-    <div class="error" id="error" role="alert" hidden></div>
+    <div class="notice" id="notice" role="status" hidden><span id="notice-text"></span><button id="close-notice" type="button" aria-label="關閉提示" title="關閉提示">×</button></div>
+    <div class="error" id="error" role="alert" hidden><span id="error-text"></span><button id="close-error" type="button" aria-label="關閉錯誤提示" title="關閉提示">×</button></div>
     <section id="chat-scroll" class="chat-scroll" tabindex="0" aria-label="對話內容">
       <div id="conversation-pane">
         <div class="welcome" id="welcome"><div class="welcome-mark" aria-hidden="true">π</div><p class="eyebrow">留個空間，把事情想清楚。</p><h2 id="welcome-title">今天想聊什麼？</h2><p id="welcome-copy">從一個問題開始。一起寫程式、整理想法，或把卡住的地方拆開。</p><div class="starter-grid" id="starters"></div></div>
@@ -64,13 +64,14 @@
     </section>
     <div class="composer-wrap">
       <button id="jump-latest" class="jump-latest" type="button" hidden>↓ 回到最新內容</button>
-      <section class="command-menu" id="command-menu" aria-label="可用指令" hidden><div class="command-menu-heading"><span>可用指令</span><span>選擇後再送出</span></div><div id="command-options" role="listbox" aria-label="選擇指令"></div><p id="command-empty" hidden>找不到符合的指令。</p><p id="command-usage" hidden></p><p class="command-keyboard-hint">↑ ↓ 選擇 · Tab / Enter 填入 · Esc 關閉</p></section>
+      <section class="command-menu" id="command-menu" aria-label="可用指令" hidden><div class="command-menu-heading"><span>可用指令</span><span id="command-menu-hint">選擇後再送出</span></div><div id="command-options" role="listbox" aria-label="選擇指令"></div><p id="command-empty" hidden>找不到符合的指令。</p><p id="command-usage" hidden></p><p class="command-keyboard-hint">↑ ↓ 選擇 · Tab 補全 · Enter 補全或送出 · Esc 關閉</p></section>
       <form id="composer" class="composer">
         <div id="image-attachments" class="image-attachments" aria-label="待送圖片" hidden></div><p id="image-status" class="small muted" role="status" hidden></p>
         <label class="sr-only" for="prompt">輸入訊息</label>
-        <textarea id="prompt" rows="1" maxlength="32000" placeholder="輸入訊息，或 / 查看指令…" title="Enter 送出 · Shift + Enter 換行" aria-describedby="composer-hint" aria-controls="command-options" aria-expanded="false" aria-autocomplete="list" autocomplete="off"></textarea>
+        <textarea id="prompt" rows="1" maxlength="32000" placeholder="輸入訊息，或 / 查看指令…" title="Enter 送出 · Shift + Enter 換行" aria-describedby="composer-hint" aria-controls="command-options" aria-haspopup="listbox" aria-expanded="false" aria-autocomplete="list" autocomplete="off"></textarea>
         <div class="composer-bottom">
           <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden><button id="add-image" type="button" class="attach-button" aria-label="加入圖片" title="貼上或選擇圖片（每張最多 5 MiB）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4"/><circle cx="15" cy="8" r="1"/></svg></button>
+          <button id="open-commands" class="commands-button" type="button" aria-haspopup="dialog" aria-controls="help-dialog" title="搜尋可用指令">/ 指令</button>
           <button class="model-button" id="choose-model" type="button" aria-label="選擇模型" aria-haspopup="dialog" aria-describedby="model-action-hint"><strong id="model-button-label">目前設定</strong><span aria-hidden="true">⌄</span></button>
           <button id="open-transcript" class="trace-button" type="button" aria-label="Transcript 與 Token 用量" aria-controls="transcript-pane" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM9 8h6M9 12h6M9 16h4"/></svg><span id="trace-idle">紀錄</span><span class="activity" id="activity" role="status" aria-live="polite" hidden></span><span class="token-unit">本輪輸出</span><span id="token-summary">—</span></button>
           <span id="composer-hint" class="sr-only">Enter 送出 · Shift + Enter 換行 · 輸入 / 查看指令</span>
@@ -144,8 +145,11 @@
     <div id="model-results" class="choice-results" aria-label="可用模型"></div>
   </dialog>
   <dialog id="help-dialog" class="dialog" aria-labelledby="help-title">
-    <div class="dialog-heading"><h2 id="help-title">可用指令</h2><button class="icon-button" id="close-help" aria-label="關閉指令說明">×</button></div>
-    <p class="muted small">點選指令會填入輸入框，確認內容後再送出。</p><div id="help-results" class="choice-results"></div>
+    <div class="dialog-heading"><h2 id="help-title">搜尋指令</h2><button class="icon-button" id="close-help" aria-label="關閉指令說明">×</button></div>
+    <p class="muted small">搜尋名稱、用途或子指令。選取後會填入輸入框，確認內容再送出。</p>
+    <label class="sr-only" for="help-query">搜尋指令與用途</label><input id="help-query" type="search" role="combobox" aria-autocomplete="list" aria-expanded="true" placeholder="例如：筆記、Wiki、瀏覽器、學習模式" maxlength="200" autocomplete="off" aria-controls="help-results">
+    <p id="help-draft-hint" class="muted small" hidden>輸入框已有草稿；請先送出或清空，再選擇指令。</p>
+    <div id="help-results" class="choice-results command-palette-results" role="listbox" aria-label="搜尋結果"></div>
   </dialog>
   <dialog id="session-dialog" class="dialog" aria-labelledby="session-info-title">
     <div class="dialog-heading"><h2 id="session-info-title">目前對話</h2><button class="icon-button" id="close-session-info" aria-label="關閉對話資訊">×</button></div><dl id="session-info" class="session-info"></dl>

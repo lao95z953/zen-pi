@@ -66,6 +66,9 @@ try {
     await enter(api, ctx); assert(userSent(api).length === 0);
     assertIncludes(ctx._notices.at(-1).text, "本輪完成");
     ctx.isIdle = () => true;
+    await api._commands.get("research").handler("resume", ctx);
+    assert(userSent(api).length === 0); assertIncludes(ctx._notices.at(-1).text, "/research resume <topic>");
+    assert(JSON.parse((await context(api, ctx)).message.content).mode === "general");
     await api._commands.get("research").handler("resume missing", ctx);
     assert(userSent(api).length === 0); assertIncludes(ctx._notices.at(-1).text, "找不到");
   });

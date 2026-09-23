@@ -2,7 +2,7 @@ export const WEB_COMMANDS = [
   { name: 'model', description: '選擇目前對話使用的模型', source: 'web', usage: '/model [provider/model 或 model ID]' },
   { name: 'help', description: '查看 Web 可用的指令', source: 'web' },
   { name: 'new', description: '在目前 Workspace 開始新對話', source: 'web' },
-  { name: 'name', description: '設定目前對話名稱', source: 'web', usage: '/name <新名稱>' },
+  { name: 'name', description: '設定目前對話名稱', source: 'web', usage: '/name <新名稱>', argumentHint: '接著輸入新名稱' },
   { name: 'session', description: '查看目前對話資訊', source: 'web' },
   { name: 'thinking', description: '選擇目前模型支援的推理程度', source: 'web', usage: '/thinking [程度]' },
   { name: 'compact', description: '設定摘要重點並確認整理上下文', source: 'web', usage: '/compact [摘要重點]' },
@@ -11,10 +11,11 @@ export const WEB_COMMANDS = [
   { name: 'export', description: '下載目前對話的 HTML 檔案', source: 'web' },
   { name: 'copy', description: '複製最後一則回覆', source: 'web' },
   { name: 'agents', description: '查看子 Agent 的工作與狀態', source: 'web' },
-  { name: 'side', description: '從目前對話開啟 Side Chat', source: 'web', usage: '/side [問題]' },
+  { name: 'side', description: '開啟 Side Chat；問題會填入草稿，需再送出', source: 'web', usage: '/side [問題]' },
 ];
 
 export const TERMINAL_COMMANDS = new Set(['settings', 'tree', 'scoped-models', 'import', 'share', 'changelog', 'hotkeys', 'trust', 'login', 'logout', 'resume', 'reload', 'quit']);
+const INTERNAL_COMMANDS = new Set(['study-status', 'study-notes']);
 const COMMAND_USAGE = {
   browser: { usage: '/browser <setup|tabs|status|stop|分頁 ID 或網址 任務>', suggestions: [
     { value: '/browser setup', label: '連接 Zen Browser' },
@@ -34,7 +35,7 @@ const COMMAND_USAGE = {
     { value: '/study off', label: '離開學習模式', description: '回到一般模式' },
   ] },
   research: { usage: '/research [問題|resume <topic>|status|off]', suggestions: [
-    { value: '/research resume', label: '接續研究（填入 topic）' },
+    { value: '/research resume', label: '接續研究（填入 topic）', argumentHint: '接著輸入研究 topic' },
     { value: '/research status', label: '查看目前研究狀態' },
     { value: '/research off', label: '離開研究模式', description: '回到一般模式' },
   ] },
@@ -44,7 +45,7 @@ const COMMAND_USAGE = {
     { value: '/wiki default', label: '回到預設 LLM Wiki' },
     { value: '/wiki check', label: '檢查知識紀錄的來源' },
     { value: '/wiki rebuild', label: '重建知識紀錄的 Markdown' },
-    { value: '/wiki forget', label: '停用紀錄（填入 ID）', description: '停止檢索該筆紀錄，保留歷史' },
+    { value: '/wiki forget', label: '停用紀錄（填入 ID）', description: '停止檢索該筆紀錄，保留歷史', argumentHint: '接著輸入紀錄 ID' },
   ] },
 };
 const DEFAULT_COMMANDS = [
@@ -55,7 +56,7 @@ const DEFAULT_COMMANDS = [
 
 export function safeCommands(commands) {
   return (Array.isArray(commands) ? commands : []).filter(command =>
-    typeof command?.name === 'string' && command.name.length <= 200 && /^[^\s/]+$/.test(command.name) && !TERMINAL_COMMANDS.has(command.name))
+    typeof command?.name === 'string' && command.name.length <= 200 && /^[^\s/]+$/.test(command.name) && !INTERNAL_COMMANDS.has(command.name))
     .map(command => ({ name: command.name, description: typeof command.description === 'string' ? command.description.slice(0, 300) : '',
       source: ['extension', 'prompt', 'skill'].includes(command.source) ? command.source : 'extension', ...safeCommandUsage(command) }));
 }
@@ -72,7 +73,9 @@ function safeCommandUsage(command) {
       values.add(suggestion.value); return true;
     }).slice(0, 12).map(suggestion => ({ value: suggestion.value,
       label: typeof suggestion.label === 'string' ? suggestion.label.slice(0, 200) : suggestion.value,
-      ...(typeof suggestion.description === 'string' ? { description: suggestion.description.slice(0, 300) } : {}) }));
+      ...(typeof suggestion.description === 'string' ? { description: suggestion.description.slice(0, 300) } : {}),
+      ...(typeof suggestion.argumentHint === 'string' && suggestion.argumentHint.length <= 200 && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(suggestion.argumentHint)
+        ? { argumentHint: suggestion.argumentHint } : {}) }));
   }
   return safe;
 }

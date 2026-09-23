@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as uiState from '../web/public/state.js';
 
-const { commandSuggestions, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, draftScope } = uiState;
+const { commandSuggestions, commandPaletteOptions, moveCommandSelection, filterModels, acceptsCommandResponse, modelDisabledReason, draftScope } = uiState;
 const commands = [
   { name: 'model', description: '選擇模型', source: 'web' },
   { name: 'mode', description: '切換對話模式', source: 'extension' },
@@ -16,10 +16,14 @@ assert.deepEqual(commandSuggestions(commands, '/'), commands);
 assert.deepEqual(commandSuggestions(commands, '/MOD').map(x => x.name), ['model', 'mode']);
 assert.deepEqual(commandSuggestions(commands, '/ＭＯＤＥＬ').map(x => x.name), ['model']);
 assert.deepEqual(commandSuggestions(commands, '/模型').map(x => x.name), ['model']);
+assert.deepEqual(commandSuggestions([{ name: 'wiki', description: '知識庫', suggestions: [{ value: '/wiki use ./llm-wiki', label: '掛載 Wiki' }] }], '/掛載').map(x => x.name), ['wiki']);
 assert.deepEqual(commandSuggestions(commands, '/skill:').map(x => x.name), ['skill:review']);
 assert.deepEqual(commandSuggestions(commands, '/explain').map(x => x.name), ['explain']);
 for (const input of ['hello /model', '/model ', '/model provider/id', '/mode\nstudy', '/unknown']) assert.equal(commandSuggestions(commands, input).length, 0);
 assert.equal(commandSuggestions(undefined, '/').length, 0);
+assert.deepEqual(commandPaletteOptions([{ name: 'wiki', description: '知識庫', suggestions: [{ value: '/wiki use ./llm-wiki', label: '掛載目前 Wiki' }] }], '掛載').map(x => x.value), ['/wiki use ./llm-wiki']);
+assert.equal(commandPaletteOptions(commands, '/model')[0].value, '/model');
+assert.equal(commandPaletteOptions(commands, 'mode')[0].value, '/mode', 'An exact command ranks ahead of a longer prefix');
 assert.equal(moveCommandSelection(0, -1, 5), 4);
 assert.equal(moveCommandSelection(4, 1, 5), 0);
 assert.equal(moveCommandSelection(0, 1, 0), -1);
@@ -161,6 +165,9 @@ assert.equal(ui.requests[0].url, '/api/prompt');
 assert.equal(ui.requests[0].body.message, '/model');
 ui.requests.shift().answer(modelResponse); await tick();
 assert.equal(ui.nodes.get('model-dialog').open, true);
+const exactCommand = harness(); exactCommand.snapshot(snapshot);
+exactCommand.type('/model'); exactCommand.key('Enter');
+assert.equal(exactCommand.requests[0].body.message, '/model', 'Enter executes a fully typed command; Tab remains completion');
 assert.equal(ui.nodes.get('model-results').children.length, 2);
 ui.nodes.get('model-query').value = 'remote'; ui.nodes.get('model-query').oninput();
 assert.equal(ui.nodes.get('model-results').children.length, 1);
@@ -234,6 +241,57 @@ assert.equal(subUi.nodes.get('command-menu').hidden, false, 'Selecting a command
 subUi.key('ArrowDown'); subUi.key('Enter');
 assert.equal(subUi.nodes.get('prompt').value, '/mode study ');
 assert.equal(subUi.requests.length, 0);
+subUi.key('Enter');
+assert.equal(subUi.requests[0].body.message, '/mode study', 'The next Enter sends a completed command instead of selecting it forever');
+subUi.requests.shift().answer({ ok: true, state: { ...snapshot, revision: 2, commands: subcommands } }); await tick();
+const labeledUi = harness(); labeledUi.snapshot({ ...snapshot, commands: subcommands });
+labeledUi.type('/mode 學習');
+assert.equal(labeledUi.nodes.get('command-options').children.length, 1, 'Chinese subcommand labels are searchable');
+assert.equal(labeledUi.nodes.get('command-options').children[0].textContent.includes('學習'), true);
+const required = harness(); required.snapshot({ ...snapshot, commands: [{ name: 'name', argumentHint: '接著輸入新名稱', usage: '/name <新名稱>' },
+  { name: 'research', usage: '/research resume <topic>', suggestions: [{ value: '/research resume', label: '接續研究', argumentHint: '接著輸入研究 topic' }] }] });
+required.type('/name'); required.key('Enter');
+assert.equal(required.requests.length, 0, 'A required argument cannot be sent empty');
+assert.equal(required.nodes.get('prompt').value, '/name');
+required.type('/research re'); required.key('Enter');
+assert.equal(required.nodes.get('prompt').value, '/research resume ');
+assert.match(required.nodes.get('command-usage').textContent, /topic/);
+required.key('Enter'); assert.equal(required.requests.length, 0);
+
+const palette = harness(); palette.snapshot({ ...snapshot, commands: subcommands });
+palette.type('尚未送出的草稿'); palette.nodes.get('open-commands').onclick();
+assert.equal(palette.nodes.get('help-dialog').open, true);
+assert.equal(palette.focused(), palette.nodes.get('help-query'));
+palette.nodes.get('help-query').value = '學習'; palette.nodes.get('help-query').oninput();
+assert.equal(palette.nodes.get('help-results').children.length, 1);
+assert.equal(palette.nodes.get('help-results').children[0].disabled, true, 'Command selection cannot replace an ordinary draft silently');
+palette.nodes.get('help-results').children[0].onclick();
+assert.equal(palette.nodes.get('prompt').value, '尚未送出的草稿');
+palette.nodes.get('close-help').onclick(); palette.type('/browser 12 搜尋任務'); palette.nodes.get('open-commands').onclick();
+assert.equal(palette.nodes.get('help-results').children[0].disabled, true, 'A slash command with arguments is also a protected draft');
+palette.nodes.get('close-help').onclick(); palette.type(''); palette.nodes.get('open-commands').onclick();
+palette.nodes.get('help-query').value = '學習'; palette.nodes.get('help-query').oninput();
+palette.nodes.get('help-query').onkeydown({ key: 'Enter', preventDefault() {} });
+assert.equal(palette.nodes.get('help-dialog').open, false);
+assert.equal(palette.nodes.get('prompt').value, '/mode study ');
+const grid = harness(); grid.snapshot(snapshot); grid.nodes.get('open-commands').onclick();
+grid.nodes.get('help-query').onkeydown({ key: 'ArrowDown', preventDefault() {} });
+assert.equal(grid.nodes.get('help-results').children[2].getAttribute('aria-selected'), 'true', 'Down moves to the next row in a two-column palette');
+const firstHelpOption = grid.nodes.get('help-results').children[0];
+grid.snapshot({ ...snapshot, revision: 2, messages: [{ id: 'stream', role: 'assistant', text: '新增文字', streaming: true }] });
+assert.equal(grid.nodes.get('help-results').children[0], firstHelpOption, 'Streaming snapshots do not rebuild an open command palette');
+
+const noticeUi = harness(); noticeUi.snapshot({ ...snapshot, notice: '指令完成' });
+assert.equal(noticeUi.nodes.get('notice').hidden, false);
+noticeUi.nodes.get('close-notice').onclick();
+noticeUi.snapshot({ ...snapshot, revision: 2, notice: '指令完成' });
+assert.equal(noticeUi.nodes.get('notice').hidden, true, 'A dismissed notice stays closed across background snapshots');
+noticeUi.snapshot({ ...snapshot, revision: 3, notice: '新的指令結果' });
+assert.equal(noticeUi.nodes.get('notice').hidden, false, 'A new notice is visible');
+noticeUi.snapshot({ ...snapshot, revision: 4, error: '指令未完成' });
+noticeUi.nodes.get('close-error').onclick();
+noticeUi.snapshot({ ...snapshot, revision: 5, error: '指令未完成' });
+assert.equal(noticeUi.nodes.get('error').hidden, true, 'A dismissed error does not reopen on the next snapshot');
 
 const controlsUi = harness(); controlsUi.snapshot(snapshot);
 controlsUi.nodes.get('choose-thinking').onclick();
